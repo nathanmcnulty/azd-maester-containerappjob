@@ -90,10 +90,14 @@ param enableResourceLocks bool = true
 @description('Optional custom tags merged onto top-level resources')
 param customTags object = {}
 
-// Standardized parameters and tags for consistency with automation-account and function-app
-var managedEnvironmentName = 'cae-${toLower(environmentName)}'
-var containerAppJobName = 'caj-maester-${toLower(environmentName)}'
+// Standardized parameters and tags for consistency with automation-account and function-app.
+// Keep provider resource names within their service limits even when an azd
+// environment name is long. The stable suffix prevents collisions between
+// environments sharing the same name prefix.
+var normalizedEnvironmentName = toLower(environmentName)
 var resourceSuffix = toLower(uniqueString(resourceGroup().id, environmentName))
+var managedEnvironmentName = 'cae-${substring(normalizedEnvironmentName, 0, min(length(normalizedEnvironmentName), 48))}-${substring(resourceSuffix, 0, 6)}'
+var containerAppJobName = 'caj-maester-${substring(normalizedEnvironmentName, 0, min(length(normalizedEnvironmentName), 12))}-${substring(resourceSuffix, 0, 6)}'
 var storageAccountName = 'stmaester${resourceSuffix}'
 var acrName = 'crmaester${resourceSuffix}'
 var fileShareName = 'scripts'
@@ -105,7 +109,7 @@ var acrPullRoleId = subscriptionResourceId(
   'Microsoft.Authorization/roleDefinitions',
   '7f951dda-4ed3-4680-a7ca-43fe172d538d'
 )
-var appServicePlanName = 'asp-${toLower(environmentName)}'
+var appServicePlanName = 'asp-${substring(normalizedEnvironmentName, 0, min(length(normalizedEnvironmentName), 28))}-${substring(resourceSuffix, 0, 6)}'
 var webAppName = 'app-maester-${resourceSuffix}'
 var includeWebApp = toLower(includeWebAppOption) == 'true'
 var includeACR = toLower(includeACROption) == 'true'
