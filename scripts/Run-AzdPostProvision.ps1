@@ -25,7 +25,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-Import-Module (Join-Path $PSScriptRoot '..\vendor\Azd.MaesterHooks\Maester-SetupHelpers.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'vendor\Azd.MaesterHooks\Maester-SetupHelpers.psm1') -Force
 
 function Get-EnvValue {
   param(
@@ -211,7 +211,10 @@ if ($needsReplicationWait) {
   }
 }
 
-$containerAppJobName = "caj-maester-$($EnvironmentName.ToLower())"
+$containerAppJobName = Get-EnvValue -Lines $envValues -Name 'CONTAINER_JOB_NAME'
+if ([string]::IsNullOrWhiteSpace($containerAppJobName)) {
+  throw "Post-provision setup did not record the deployed Container App Job name for environment '$EnvironmentName'."
+}
 $testParams = @{
   SubscriptionId      = $SubscriptionId
   ResourceGroupName   = $ResourceGroupName

@@ -41,7 +41,7 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Set-Location $projectRoot
 
-Import-Module (Join-Path $PSScriptRoot '..\vendor\Azd.MaesterHooks\Maester-SetupHelpers.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'vendor\Azd.MaesterHooks\Maester-SetupHelpers.psm1') -Force
 
 
 # ──────────────────────────────────────────────
@@ -205,17 +205,41 @@ if (-not $jobsPayload.value -or $jobsPayload.value.Count -eq 0) {
   throw "No Container App Job resources were found in resource group '$resolvedResourceGroupName'."
 }
 
-$preferredJobName = "caj-maester-$($EnvironmentName.ToLower())"
-$containerAppJob = @($jobsPayload.value | Where-Object { $_.name -eq $preferredJobName }) | Select-Object -First 1
+$jobs = @($jobsPayload.value)
+$normalizedEnvironmentName = $EnvironmentName.ToLowerInvariant()
+$containerAppJob = @(
+  $jobs | Where-Object {
+    $_.PSObject.Properties['tags'] -and
+    $_.tags -and
+    $_.tags.PSObject.Properties['environment'] -and
+    $_.tags.environment -eq $normalizedEnvironmentName
+  }
+) | Select-Object -First 1
 if (-not $containerAppJob) {
-  $foundNames = @($jobsPayload.value | ForEach-Object { $_.name } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+  $containerAppJob = @(
+    $jobs | Where-Object {
+      $_.PSObject.Properties['tags'] -and
+      $_.tags -and
+      $_.tags.PSObject.Properties['managedBy'] -and
+      $_.tags.managedBy -eq 'azd' -and
+      $_.tags.PSObject.Properties['workload'] -and
+      $_.tags.workload -eq 'maester'
+    }
+  ) | Select-Object -First 1
+}
+if (-not $containerAppJob -and $jobs.Count -eq 1) {
+  $containerAppJob = $jobs[0]
+}
+if (-not $containerAppJob) {
+  $foundNames = @($jobs | ForEach-Object { $_.name } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
   $foundList = if ($foundNames.Count -gt 0) { $foundNames -join ', ' } else { 'none' }
-  throw "Expected Container App Job '$preferredJobName' was not found in resource group '$resolvedResourceGroupName'. Found: $foundList. This usually indicates provisioning failed, and setup cannot continue."
+  throw "No uniquely identifiable Container App Job was found in resource group '$resolvedResourceGroupName'. Found: $foundList. This usually indicates provisioning failed, and setup cannot continue."
 }
 
 $containerAppJobName = $containerAppJob.name
+Set-AzdEnvValue -Name 'CONTAINER_JOB_NAME' -Value $containerAppJobName
 
-$principalId = & (Join-Path $PSScriptRoot '..\vendor\Azd.MaesterHooks\Get-ManagedIdentityPrincipal.ps1') `
+$principalId = & (Join-Path $PSScriptRoot 'vendor\Azd.MaesterHooks\Get-ManagedIdentityPrincipal.ps1') `
   -SubscriptionId $SubscriptionId `
   -ResourceGroupName $resolvedResourceGroupName `
   -ProviderNamespace 'Microsoft.App' `
@@ -232,7 +256,7 @@ Set-AzdEnvValue -Name 'CONTAINER_JOB_MI_PRINCIPAL_ID' -Value $principalId
 $mailRecipientForGraph = if ($env:MAIL_RECIPIENT) { $env:MAIL_RECIPIENT.Trim() } else { '' }
 $includeMailSend = -not [string]::IsNullOrWhiteSpace($mailRecipientForGraph)
 
-& (Join-Path $PSScriptRoot '..\vendor\Azd.MaesterHooks\Grant-MaesterGraphPermissions.ps1') `
+& (Join-Path $PSScriptRoot 'vendor\Azd.MaesterHooks\Grant-MaesterGraphPermissions.ps1') `
   -TenantId $TenantId `
   -PrincipalObjectId $principalId `
   -PermissionProfile $PermissionProfile `
