@@ -1,0 +1,21 @@
+{
+  "title": "Maester Container Apps Job Monitoring",
+  "summary": "Run scheduled Microsoft 365 security checks as an Azure Container Apps Job and publish reports to Azure Storage.",
+  "tags": [
+    "Maester",
+    "Microsoft 365",
+    "Azure Container Apps",
+    "Security Monitoring"
+  ],
+  "highlights": [
+    "Runs scheduled checks in a managed Container Apps Job",
+    "Stores compressed history with a latest-report pointer",
+    "Can prebuild modules in Azure Container Registry",
+    "Supports optional web portal and extended permission checks"
+  ],
+  "solutionCount": 1,
+  "quickstartCommands": [
+    "azd init -t nathanmcnulty/azd-maester-containerappjob",
+    "azd up"
+  ]
+}
