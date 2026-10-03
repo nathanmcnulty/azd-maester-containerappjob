@@ -140,6 +140,16 @@ $targets = Resolve-MaesterDeploymentTargets -EnvironmentValues $deploymentValues
 }
 $storageAccount = $targets.StorageAccount
 $webApp = $targets.WebApp
+$containerAppJob = Resolve-MaesterMainDeploymentTarget -EnvironmentValues $deploymentValues `
+  -NameOutput 'containerAppJobName' -PrincipalOutput 'containerAppJobPrincipalId' `
+  -ProviderType 'Microsoft.App/jobs' -ApiVersion '2024-03-01' `
+  -SubscriptionId $SubscriptionId -ResourceGroupName $resolvedResourceGroupName `
+  -EnvironmentName $EnvironmentName -SolutionName 'container-app-job' -GetResource {
+    param($path)
+    Invoke-RestMethod -Method GET -Uri "https://management.azure.com$path" -Headers $armHeaders
+  }
+$containerAppJobName = [string]$containerAppJob.name
+$principalId = [string]$containerAppJob.identity.principalId
 
 # ──────────────────────────────────────────────
 # Storage Blob Data Reader for signed-in user
@@ -186,26 +196,9 @@ else {
 }
 
 # ──────────────────────────────────────────────
-# Discover Container App Job and get managed identity principal
+# Persist verified Container App Job identity
 # ──────────────────────────────────────────────
-
-$jobsQuery = "/subscriptions/$SubscriptionId/resourceGroups/$resolvedResourceGroupName/providers/Microsoft.App/jobs?api-version=2024-03-01"
-$jobsPayload = Invoke-RestMethod -Method GET -Uri "https://management.azure.com$jobsQuery" -Headers $armHeaders
-$expectedJobName = if ($env:CONTAINER_APP_JOB_NAME) { $env:CONTAINER_APP_JOB_NAME } else { '' }
-$containerAppJob = & (Join-Path $PSScriptRoot 'Resolve-MaesterContainerJob.ps1') `
-  -JobsPayload $jobsPayload -EnvironmentName $EnvironmentName -ExpectedName $expectedJobName
-
-$containerAppJobName = $containerAppJob.name
 Set-MaesterAzdEnvValue -EnvironmentName $EnvironmentName -Name 'CONTAINER_JOB_NAME' -Value $containerAppJobName
-
-$principalId = & (Join-Path $PSScriptRoot 'vendor\Azd.MaesterHooks\Get-ManagedIdentityPrincipal.ps1') `
-  -SubscriptionId $SubscriptionId `
-  -ResourceGroupName $resolvedResourceGroupName `
-  -ProviderNamespace 'Microsoft.App' `
-  -ResourceType 'jobs' `
-  -ResourceName $containerAppJobName `
-  -ApiVersion '2024-03-01'
-
 Set-MaesterAzdEnvValue -EnvironmentName $EnvironmentName -Name 'CONTAINER_JOB_MI_PRINCIPAL_ID' -Value $principalId
 
 # ──────────────────────────────────────────────

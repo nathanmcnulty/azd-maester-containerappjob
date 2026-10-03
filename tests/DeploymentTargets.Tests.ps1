@@ -7,6 +7,8 @@ BeforeAll {
   $script:scope = "/subscriptions/$subscriptionId/resourceGroups/$resourceGroupName"
   $script:storageId = "$scope/providers/Microsoft.Storage/storageAccounts/stmaester123"
   $script:webAppId = "$scope/providers/Microsoft.Web/sites/app-maester-123"
+  $script:jobId = "$scope/providers/Microsoft.App/jobs/maester-job"
+  $script:principalId = '22222222-2222-4222-8222-222222222222'
 
   function Invoke-TargetResolution {
     param([hashtable]$Values, [hashtable]$Resources)
@@ -22,8 +24,32 @@ BeforeAll {
     @{
       $storageId = [pscustomobject]@{ id = $storageId; name = 'stmaester123'; type = 'Microsoft.Storage/storageAccounts'; tags = $tags }
       $webAppId = [pscustomobject]@{ id = $webAppId; name = 'app-maester-123'; type = 'Microsoft.Web/sites'; kind = 'app'; tags = $tags; properties = @{ defaultHostName = 'app-maester-123.azurewebsites.net' } }
+      $jobId = [pscustomobject]@{ id = $jobId; name = 'maester-job'; type = 'Microsoft.App/jobs'; tags = $tags; identity = @{ type = 'SystemAssigned'; principalId = $principalId } }
       "$scope/providers/Microsoft.Web/sites/unrelated" = [pscustomobject]@{ id = "$scope/providers/Microsoft.Web/sites/unrelated"; name = 'unrelated'; type = 'Microsoft.Web/sites'; kind = 'app'; tags = @{ solution = 'other' }; properties = @{ defaultHostName = 'unrelated.azurewebsites.net' } }
     }
+  }
+}
+
+Describe 'Main Container App Job preflight' {
+  It 'binds the named deployed job and managed identity' {
+    $resources = New-Resources
+    $result = Resolve-MaesterMainDeploymentTarget -EnvironmentValues @{ containerAppJobName = 'maester-job'; containerAppJobPrincipalId = $principalId } -NameOutput 'containerAppJobName' -PrincipalOutput 'containerAppJobPrincipalId' -ProviderType 'Microsoft.App/jobs' -ApiVersion '2024-03-01' -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -EnvironmentName $environmentName -SolutionName $solutionName -GetResource { param($path) $resources[($path -split '\?')[0]] }
+    $result.id | Should -Be $jobId
+  }
+
+  It 'fails closed on missing, mismatched, or wrong-scope job before writes' {
+    $resources = New-Resources
+    $resolver = { param($values) Resolve-MaesterMainDeploymentTarget -EnvironmentValues $values -NameOutput 'containerAppJobName' -PrincipalOutput 'containerAppJobPrincipalId' -ProviderType 'Microsoft.App/jobs' -ApiVersion '2024-03-01' -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -EnvironmentName $environmentName -SolutionName $solutionName -GetResource { param($path) $resources[($path -split '\?')[0]] } }
+    { & $resolver @{ containerAppJobPrincipalId = $principalId } } | Should -Throw '*containerAppJobName*'
+    { & $resolver @{ containerAppJobName = 'maester-job'; containerAppJobPrincipalId = '33333333-3333-4333-8333-333333333333' } } | Should -Throw '*managed identity*'
+    $resources[$jobId].id = '/subscriptions/other/resourceGroups/other/providers/Microsoft.App/jobs/maester-job'
+    { & $resolver @{ containerAppJobName = 'maester-job'; containerAppJobPrincipalId = $principalId } } | Should -Throw '*exact output*'
+  }
+
+  It 'preflights the job before storage role and environment receipt writes' {
+    $setup = Get-Content (Join-Path $PSScriptRoot '../scripts/Setup-PostDeploy.ps1') -Raw
+    $setup.IndexOf('Resolve-MaesterMainDeploymentTarget') | Should -BeLessThan $setup.IndexOf('Storage Blob Data Reader for signed-in user')
+    $setup.IndexOf('Resolve-MaesterMainDeploymentTarget') | Should -BeLessThan $setup.IndexOf("Set-MaesterAzdEnvValue -EnvironmentName `$EnvironmentName -Name 'CONTAINER_JOB_NAME'")
   }
 }
 

@@ -101,10 +101,11 @@ What this does:
 
 For a manual postprovision retry after a successful provision, run
 `./scripts/Setup-PostDeploy.ps1 -EnvironmentName <selected-environment> -SubscriptionId <selected-subscription> -ResourceGroupName <deployed-resource-group>`.
-Setup reads that environment's exact `STORAGE_ACCOUNT_NAME` and optional
+Setup reads that environment's exact `containerAppJobName`, `containerAppJobPrincipalId`, `STORAGE_ACCOUNT_NAME` and optional
 `WEB_APP_NAME` and `WEB_APP_ENABLED` deployment outputs; a false enablement output skips Easy Auth even
 when other Web Apps exist in the resource group. Missing or mismatched targets
-stop setup before role assignments or Easy Auth changes.
+stop setup before role assignments or Easy Auth changes. The postprovision
+summary uses these exact outputs rather than another resource in the group.
 
 Defaults:
 

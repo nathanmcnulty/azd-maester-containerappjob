@@ -26,6 +26,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'vendor\Azd.MaesterHooks\Maester-SetupHelpers.psm1') -Force
+. (Join-Path $PSScriptRoot 'Resolve-DeploymentTargets.ps1')
 
 function Get-EnvValue {
   param(
@@ -114,13 +115,7 @@ $exoAppRoleAssignmentIdsFromEnv = 'n/a'
 $teamsRoleAssignmentIdsFromEnv = 'n/a'
 $azureRoleAssignmentIdsFromEnv = 'n/a'
 $exoServicePrincipalDisplayNameFromEnv = 'n/a'
-$envValues = @{}
-try {
-  $envValues = (& azd env get-values --output json 2>$null | ConvertFrom-Json -AsHashtable)
-}
-catch {
-  $envValues = @{}
-}
+$envValues = Get-MaesterDeploymentValues -EnvironmentName $EnvironmentName -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName
 
 if ($envValues.Count -gt 0) {
   $easyAuthAppObjectIdValue = Get-EnvValue -Lines $envValues -Name 'EASY_AUTH_ENTRA_APP_OBJECT_ID'
@@ -230,18 +225,37 @@ $validationResult = & "$PSScriptRoot\Invoke-JobValidation.ps1" @testParams
 
 $armToken = az account get-access-token --subscription $SubscriptionId --resource https://management.azure.com/ --query accessToken -o tsv
 $armHeaders = @{ Authorization = "Bearer $armToken" }
-$resourcesPath = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/resources?api-version=2021-04-01"
-$resourcesPayload = Invoke-RestMethod -Method GET -Uri "https://management.azure.com$resourcesPath" -Headers $armHeaders
-$resources = @($resourcesPayload.value)
 $customDnsDocsUrl = 'https://learn.microsoft.com/azure/app-service/app-service-web-tutorial-custom-domain'
-
-$containerJobResource = $resources | Where-Object { $_.type -eq 'Microsoft.App/jobs' } | Select-Object -First 1
-$environmentResource = $resources | Where-Object { $_.type -eq 'Microsoft.App/managedEnvironments' } | Select-Object -First 1
-$storageResource = $resources | Where-Object { $_.type -eq 'Microsoft.Storage/storageAccounts' } | Select-Object -First 1
-$acrResource = $resources | Where-Object { $_.type -eq 'Microsoft.ContainerRegistry/registries' } | Select-Object -First 1
-$webAppResource = $resources | Where-Object { $_.type -eq 'Microsoft.Web/sites' } | Select-Object -First 1
-$planResource = $resources | Where-Object { $_.type -eq 'Microsoft.Web/serverfarms' } | Select-Object -First 1
-$includeWebAppEffective = [bool]$webAppResource
+$getExactResource = {
+  param($path)
+  Invoke-RestMethod -Method GET -Uri "https://management.azure.com$path" -Headers $armHeaders
+}
+$summaryTargets = Resolve-MaesterDeploymentTargets -EnvironmentValues $envValues -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -EnvironmentName $EnvironmentName -SolutionName 'container-app-job' -GetResource $getExactResource
+$containerJobResource = Resolve-MaesterMainDeploymentTarget -EnvironmentValues $envValues -NameOutput 'containerAppJobName' -PrincipalOutput 'containerAppJobPrincipalId' -ProviderType 'Microsoft.App/jobs' -ApiVersion '2024-03-01' -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -EnvironmentName $EnvironmentName -SolutionName 'container-app-job' -GetResource $getExactResource
+$storageResource = $summaryTargets.StorageAccount
+$webAppResource = $summaryTargets.WebApp
+$scope = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName"
+$environmentNameOutput = [string]$envValues['managedEnvironmentName']
+if ($environmentNameOutput -notmatch '^[A-Za-z0-9][A-Za-z0-9-]{0,78}[A-Za-z0-9]$') { throw 'Deployment output managedEnvironmentName is missing or invalid.' }
+$environmentId = "$scope/providers/Microsoft.App/managedEnvironments/$environmentNameOutput"
+$environmentResource = & $getExactResource "${environmentId}?api-version=2024-03-01"
+if (-not $environmentResource -or $environmentResource.id -ine $environmentId -or $environmentResource.type -ine 'Microsoft.App/managedEnvironments' -or $environmentResource.name -ine $environmentNameOutput) { throw 'The deployed Container App environment does not match its exact output and scope.' }
+$acrResource = $null
+$acrNameOutput = [string]$envValues['acrName']
+if (-not [string]::IsNullOrWhiteSpace($acrNameOutput)) {
+  if ($acrNameOutput -notmatch '^[A-Za-z0-9][A-Za-z0-9-]{0,48}[A-Za-z0-9]$') { throw 'Deployment output acrName is invalid.' }
+  $acrId = "$scope/providers/Microsoft.ContainerRegistry/registries/$acrNameOutput"
+  $acrResource = & $getExactResource "${acrId}?api-version=2023-07-01"
+  if (-not $acrResource -or $acrResource.id -ine $acrId -or $acrResource.type -ine 'Microsoft.ContainerRegistry/registries' -or $acrResource.name -ine $acrNameOutput) { throw 'The deployed Container Registry does not match its exact output and scope.' }
+}
+$planResource = $null
+if ($webAppResource -and $webAppResource.properties.serverFarmId) {
+  $planId = [string]$webAppResource.properties.serverFarmId
+  if ($planId -notmatch "^$([regex]::Escape($scope))/providers/Microsoft\.Web/serverfarms/[A-Za-z0-9-]+$") { throw 'The deployed Web App plan is outside the selected scope.' }
+  $planResource = & $getExactResource "${planId}?api-version=2023-12-01"
+  if (-not $planResource -or $planResource.id -ine $planId -or $planResource.type -ine 'Microsoft.Web/serverfarms') { throw 'The deployed Web App plan does not match its exact scope.' }
+}
+$includeWebAppEffective = [string]$envValues['WEB_APP_ENABLED'] -eq 'true'
 $deploymentModeEffective = if ($includeWebAppEffective) { 'webapp' } else { 'quick' }
 
 $summaryDir = Join-Path -Path (Resolve-Path (Join-Path $PSScriptRoot '..')).Path -ChildPath 'outputs'
