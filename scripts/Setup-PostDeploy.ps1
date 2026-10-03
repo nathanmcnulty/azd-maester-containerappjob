@@ -201,40 +201,9 @@ else {
 
 $jobsQuery = "/subscriptions/$SubscriptionId/resourceGroups/$resolvedResourceGroupName/providers/Microsoft.App/jobs?api-version=2024-03-01"
 $jobsPayload = Invoke-RestMethod -Method GET -Uri "https://management.azure.com$jobsQuery" -Headers $armHeaders
-if (-not $jobsPayload.value -or $jobsPayload.value.Count -eq 0) {
-  throw "No Container App Job resources were found in resource group '$resolvedResourceGroupName'."
-}
-
-$jobs = @($jobsPayload.value)
-$normalizedEnvironmentName = $EnvironmentName.ToLowerInvariant()
-$containerAppJob = @(
-  $jobs | Where-Object {
-    $_.PSObject.Properties['tags'] -and
-    $_.tags -and
-    $_.tags.PSObject.Properties['environment'] -and
-    $_.tags.environment -eq $normalizedEnvironmentName
-  }
-) | Select-Object -First 1
-if (-not $containerAppJob) {
-  $containerAppJob = @(
-    $jobs | Where-Object {
-      $_.PSObject.Properties['tags'] -and
-      $_.tags -and
-      $_.tags.PSObject.Properties['managedBy'] -and
-      $_.tags.managedBy -eq 'azd' -and
-      $_.tags.PSObject.Properties['workload'] -and
-      $_.tags.workload -eq 'maester'
-    }
-  ) | Select-Object -First 1
-}
-if (-not $containerAppJob -and $jobs.Count -eq 1) {
-  $containerAppJob = $jobs[0]
-}
-if (-not $containerAppJob) {
-  $foundNames = @($jobs | ForEach-Object { $_.name } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-  $foundList = if ($foundNames.Count -gt 0) { $foundNames -join ', ' } else { 'none' }
-  throw "No uniquely identifiable Container App Job was found in resource group '$resolvedResourceGroupName'. Found: $foundList. This usually indicates provisioning failed, and setup cannot continue."
-}
+$expectedJobName = if ($env:CONTAINER_APP_JOB_NAME) { $env:CONTAINER_APP_JOB_NAME } else { '' }
+$containerAppJob = & (Join-Path $PSScriptRoot 'Resolve-MaesterContainerJob.ps1') `
+  -JobsPayload $jobsPayload -EnvironmentName $EnvironmentName -ExpectedName $expectedJobName
 
 $containerAppJobName = $containerAppJob.name
 Set-AzdEnvValue -Name 'CONTAINER_JOB_NAME' -Value $containerAppJobName
@@ -498,7 +467,9 @@ if ($includeACR) {
   & "$PSScriptRoot\Build-MaesterImage.ps1" `
     -SubscriptionId $SubscriptionId `
     -ResourceGroupName $resolvedResourceGroupName `
-    -EnvironmentName $EnvironmentName
+    -EnvironmentName $EnvironmentName `
+    -ContainerAppJobName $containerAppJobName `
+    -AcrName $env:ACR_NAME
 }
 
 # ──────────────────────────────────────────────
