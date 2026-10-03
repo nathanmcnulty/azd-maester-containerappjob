@@ -99,6 +99,13 @@ What this does:
 - **Quick**: Container App Job + Storage
 - **WebApp**: Quick + Web App (Entra auth restricted by security group)
 
+For a manual postprovision retry after a successful provision, run
+`./scripts/Setup-PostDeploy.ps1 -EnvironmentName <selected-environment>`.
+Setup reads that environment's exact `STORAGE_ACCOUNT_NAME` and optional
+`WEB_APP_NAME` and `WEB_APP_ENABLED` deployment outputs; a false enablement output skips Easy Auth even
+when other Web Apps exist in the resource group. Missing or mismatched targets
+stop setup before role assignments or Easy Auth changes.
+
 Defaults:
 
 - `PERMISSION_PROFILE=Extended`
