@@ -16,7 +16,7 @@ param(
   [string]$AcrName,
 
   [Parameter(Mandatory = $false)]
-  [string]$ImageTag = 'latest'
+  [string]$ImageTag = ([guid]::NewGuid().ToString('N'))
 )
 
 Set-StrictMode -Version Latest
@@ -131,6 +131,19 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "Image built and pushed: $imageFqdn"
+
+# Resolve the just-built tag to an immutable manifest before updating the job.
+$imageDigest = (& az acr manifest show-metadata `
+  --registry $acrName `
+  --name "maester:${ImageTag}" `
+  --subscription $SubscriptionId `
+  --query digest `
+  --output tsv `
+  --only-show-errors) -join ''
+if ($LASTEXITCODE -ne 0 -or $imageDigest -notmatch '^sha256:[a-fA-F0-9]{64}$') {
+  throw "ACR did not return a valid digest for newly built image 'maester:${ImageTag}'."
+}
+$imageFqdn = "${acrLoginServer}/maester@$imageDigest"
 
 # Update the Container App Job to use the ACR image
 Write-Host "Updating Container App Job '$ContainerAppJobName' to use image '$imageFqdn'..."

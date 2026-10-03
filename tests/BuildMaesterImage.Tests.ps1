@@ -8,6 +8,7 @@ Describe 'Maester ACR image target' {
 
   BeforeEach {
     $global:maesterBuildCalls = 0
+    $global:maesterDigest = 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
     $global:maesterAcrListResponse = '[{"name":"crmaestertest","loginServer":"crmaestertest.azurecr.io","tags":{"environment":"verylongenvironment","managedBy":"azd","workload":"maester","solution":"container-app-job"}}]'
     Mock az {
       $global:LASTEXITCODE = 0
@@ -21,12 +22,16 @@ Describe 'Maester ACR image target' {
         $global:maesterBuildCalls++
         return
       }
+      if ($args[0] -eq 'acr' -and $args[1] -eq 'manifest' -and $args[2] -eq 'show-metadata') {
+        return $global:maesterDigest
+      }
       throw "Unexpected az command: $($args -join ' ')"
     }
   }
 
   AfterEach {
     Remove-Variable -Name maesterBuildCalls -Scope Global -ErrorAction SilentlyContinue
+    Remove-Variable -Name maesterDigest -Scope Global -ErrorAction SilentlyContinue
     Remove-Variable -Name maesterAcrListResponse -Scope Global -ErrorAction SilentlyContinue
   }
 
@@ -53,9 +58,27 @@ Describe 'Maester ACR image target' {
       $Method -eq 'GET' -and $Uri -like "*/jobs/${deployedJobName}?api-version=*"
     }
     Should -Invoke Invoke-RestMethod -Times 1 -Exactly -ParameterFilter {
-      $Method -eq 'PUT' -and $Uri -like "*/jobs/${deployedJobName}?api-version=*"
+      $Method -eq 'PUT' -and $Uri -like "*/jobs/${deployedJobName}?api-version=*" -and
+      $Body -match 'crmaestertest.azurecr.io/maester@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
     }
     $global:maesterBuildCalls | Should -Be 1
+  }
+
+  It 'does not update the job if ACR cannot resolve a digest' {
+    $global:maesterDigest = 'latest'
+    Mock Invoke-RestMethod {
+      if ($Method -eq 'PUT') { throw 'PUT must not be attempted' }
+      [pscustomobject]@{
+        location = 'eastus2'; tags = @{}; identity = @{}
+        properties = [pscustomobject]@{
+          configuration = [pscustomobject]@{ registries = @() }
+          template = [pscustomobject]@{ containers = @([pscustomobject]@{ image = 'old-image' }) }
+        }
+      }
+    }
+    { & $buildScript -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -EnvironmentName 'verylongenvironment' -ContainerAppJobName $deployedJobName -AcrName 'crmaestertest' } |
+      Should -Throw '*did not return a valid digest*'
+    Should -Invoke Invoke-RestMethod -Times 0 -ParameterFilter { $Method -eq 'PUT' }
   }
 
   It 'discovers the tagged job for direct invocation' {

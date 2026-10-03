@@ -434,29 +434,26 @@ if ($exoServicePrincipalDisplayName) {
 # Upload runner script to Azure Files share
 # ──────────────────────────────────────────────
 
-$runnerScriptPath = Join-Path -Path $PSScriptRoot -ChildPath 'Invoke-MaesterContainerJob.ps1'
-if (-not (Test-Path -Path $runnerScriptPath)) {
-  throw "Runner script was not found: $runnerScriptPath"
-}
-
 $storageAccountName = $storageAccount.name
 $storageKeyPath = "/subscriptions/$SubscriptionId/resourceGroups/$resolvedResourceGroupName/providers/Microsoft.Storage/storageAccounts/$storageAccountName/listKeys?api-version=2023-05-01"
 $storageKeysResponse = Invoke-RestMethod -Method POST -Uri "https://management.azure.com$storageKeyPath" -Headers $armHeaders -Body '{}' -ContentType 'application/json'
 $storageKey = $storageKeysResponse.keys[0].value
 
-& az storage file upload `
-  --account-name $storageAccountName `
-  --account-key $storageKey `
-  --share-name 'scripts' `
-  --source $runnerScriptPath `
-  --path 'Invoke-MaesterContainerJob.ps1' `
-  --no-progress `
-  --output none
-if ($LASTEXITCODE -ne 0) {
-  throw "Failed to upload runner script to Azure Files share 'scripts'."
+foreach ($file in @('Invoke-MaesterContainerJob.ps1', 'Install-LockedModules.ps1', 'runtime-packages.lock.json')) {
+  $sourcePath = if ($file -like '*.json') { Join-Path (Split-Path $PSScriptRoot -Parent) $file } else { Join-Path $PSScriptRoot $file }
+  if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) { throw "Required runner file was not found: $sourcePath" }
+  & az storage file upload `
+    --account-name $storageAccountName `
+    --account-key $storageKey `
+    --share-name 'scripts' `
+    --source $sourcePath `
+    --path $file `
+    --no-progress `
+    --output none
+  if ($LASTEXITCODE -ne 0) { throw "Failed to upload '$file' to Azure Files share 'scripts'." }
 }
 
-Write-Host "Uploaded runner script to Azure Files share 'scripts/$storageAccountName'."
+Write-Host "Uploaded locked runner files to Azure Files share 'scripts/$storageAccountName'."
 
 # ──────────────────────────────────────────────
 # Optional: Build and push ACR image
