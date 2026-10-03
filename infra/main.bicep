@@ -435,4 +435,7 @@ output managedEnvironmentName string = managedEnvironment.name
 output acrName string = includeACR ? acr.name : ''
 output acrLoginServer string = includeACR ? acr!.properties.loginServer : ''
 output webAppName string = includeWebApp ? maesterWebApp!.outputs.webAppName : ''
+output STORAGE_ACCOUNT_NAME string = storageAccount.name
+output WEB_APP_NAME string = includeWebApp ? maesterWebApp!.outputs.webAppName : ''
+output WEB_APP_ENABLED string = includeWebApp ? 'true' : 'false'
 output webAppDefaultHostName string = includeWebApp ? maesterWebApp!.outputs.webAppDefaultHostName : ''
