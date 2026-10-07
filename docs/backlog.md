@@ -5,8 +5,8 @@
 
 - **Schema version:** 1.0.0
 - **Repository:** nathanmcnulty/azd-maester-containerappjob
-- **Source revision:** `6288ccefab8faba0b54b85be9fb3a2ec3230c45a`
-- **Captured:** 2026-10-04
+- **Source revision:** `c29019a489ea76d34181ac6f4479db1715f090f3`
+- **Captured:** 2026-10-07
 - **Items:** 6
 
 ## MCAJ-001: Reconcile this backlog with current source and active work
@@ -229,7 +229,7 @@ Review MCAJ-005 against the current repository state. Its status or authorizatio
 
 - **Kind:** maintenance
 - **Priority:** P2
-- **Status:** proposed
+- **Status:** done
 - **Wave:** 1
 - **Authorization:** local-only
 - **Blocker:** _none_
@@ -274,7 +274,12 @@ Existing adoption must be updated through hashes and host-specific validation ra
 
 **Evidence:**
 
-- _none_
+- Adopted pilot maester-azd-hooks 0.1.6 from immutable azd-reference revision a09cac311aac7362f56d2a31833ed90ce5812649. All eight managed targets match the component manifest and lock; only Maester-UpWizard.psm1 changed from 0.1.5, to require a non-empty GUID before persisting the optional Web App group Object ID.
+- Preserved maester-report-webapp 0.1.1 at immutable revision 79f0608c672639aae0f0ed96d160b1eb17cfc08f with exact vendored hash 4b12708c76489f3f20e031fdafc706a3062276ef4a83fda7f5109f4cbd902972.
+- Added a schema-valid partial permission manifest with exactly 24 source-proven declarations&colon; eight Minimal runtime roles, eleven additional default Extended roles, four deployment-operator scopes, and optional Mail.Send. Working and raw-index comparisons returned 8/19/20/4 permissions with no evidence findings; comparisonComplete remains false and explicit gaps preserve unmodeled Azure RBAC, optional feature, operator and cleanup authority.
+- The 0.1.6 permission helper is byte-identical to 0.1.5 at SHA-256 e43b6e4ce60c9adef30355cc126519e5f754c01630c94fca9d85c04aebde3548; this adoption adds no declared scope or grant and claims no effective tenant permission.
+- Offline validation passed&colon; TargetContext 5/5, full host suite 43/43, PowerShell parse 26 files with zero errors, Bicep compilation to valid JSON SHA-256 9528dbc49a4ab436111553c59ee26c3c0ea2a214ed86f31a42a1db02a0d0dd58, canonical permission comparison tests 9/9, component/lock drift checks, backlog schema, generated Markdown and diff checks.
+- No Azure, Graph, deployment, report publication or live host operation was performed. Host-specific live execution, report access and cleanup remain under item 002 and are unchanged.
 
 **Review and authorization note:**
 
