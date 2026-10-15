@@ -343,11 +343,14 @@ Review MCAJ-002 against the current repository state. Its status or authorizatio
 
 - **Kind:** feature
 - **Priority:** P2
-- **Status:** proposed
+- **Status:** in-progress
 - **Wave:** 4
 - **Authorization:** local-only
 - **Blocker:** _none_
-- **Claim:** _none_
+- **Claim owner:** /root
+- **Claim worktree:** C&colon;&bsol;azd-reconciliation-20261015&bsol;maester-viewer-backlogs&bsol;containerappjob
+- **Claim base revision:** `1f34605d23e4f0536c9215d21f6368d98f5c30f4`
+- **Claim started:** 10/15/2026 15&colon;46&colon;10
 
 **Problem:**
 
@@ -387,7 +390,7 @@ The shared viewer design is complete, but this standalone Container App Job runn
 
 **Evidence:**
 
-- _none_
+- Source-only projection phase&colon; scripts/Maester.ViewerProjection.psm1 implements fixed-key private HTML/manifest/pointer publication, immutable If-None-Match verification, a three-attempt ordered pointer CAS, a three-attempt verified snapshot reader, and a commercial Azure Blob REST adapter with caller-supplied SecureString tokens, direct no-redirect/no-proxy HTTP, per-operation disposal/deadline, bounded streaming, and closed errors. Independent source review passed; the complete repository suite passes 112/112 on PowerShell 7.6.6 with no failures, skips, or unexecuted tests. A fresh disposable Patriot-lab Blob test passed 11/11 checks using a cached delegated identity&colon; exact bytes, initial and newer publication, immutable collision idempotence, stale and create-only write rejection, older-run ordering, interrupted publication, corruption rejection, and verified restoration. The preserved first native attempt exposed Azure BlobAlreadyExists HTTP 409, now handled only for the exact create-only condition and error header, with five transport regression cases. The temporary container role and exact owned resource group were removed and absence verified. Native proof does not establish managed-identity authority, Caddy delivery, or Entra audience access. The candidate is not wired into the runner, hooks, infrastructure, image, Caddy, identity, RBAC, or authentication; fixtures are not report-delivery proof, and MCAJ-007 remains in progress.
 
 **Review and authorization note:**
 

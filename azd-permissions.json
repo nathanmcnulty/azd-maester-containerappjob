@@ -3,7 +3,7 @@
   "solutionId": "azd-maester-containerappjob",
   "status": "implemented",
   "coverage": "partial",
-  "reviewedOn": "2026-10-07",
+  "reviewedOn": "2026-10-15",
   "requirements": [
     {
       "resource": "https://graph.microsoft.com",
@@ -449,6 +449,7 @@
     "Optional Exchange setup is not inventoried: Exchange.ManageAsApp, Exchange RBAC View-Only Configuration, RoleManagement.ReadWrite.Directory used by the shared advanced-setup connection, and its cleanup authority.",
     "Optional Teams setup is not inventoried: Teams Reader Entra directory role, RoleManagement.ReadWrite.Directory used by the shared advanced-setup connection, and its cleanup authority.",
     "Optional Azure setup is not inventoried: workload Reader at operator-selected subscription/resource-group/management-group scopes and the operator authority used to create those assignments.",
-    "Optional report web app setup is not inventoried: Website Contributor for the workload, Group.Read.All/Directory.Read.All when resolving a group name, Application.ReadWrite.All/Directory.Read.All/DelegatedPermissionGrant.ReadWrite.All for Easy Auth, and the tenant-wide openid/profile/email/User.Read delegated grant."
+    "Optional report web app setup is not inventoried: Website Contributor for the workload, Group.Read.All/Directory.Read.All when resolving a group name, Application.ReadWrite.All/Directory.Read.All/DelegatedPermissionGrant.ReadWrite.All for Easy Auth, and the tenant-wide openid/profile/email/User.Read delegated grant.",
+    "The source-only optional Container App viewer projection is not integrated or granted: its dedicated private container publisher is expected to need Storage Blob Data Contributor at that container and its future viewer identity Storage Blob Data Reader at that container. No deployable identity, RBAC binding, image, authentication configuration, or role adoption exists in this phase."
   ]
 }
