@@ -1,0 +1,45 @@
+{
+	admin off
+	persist_config off
+	auto_https off
+	log default {
+		output discard
+	}
+	servers {
+		protocols h1
+		max_header_size 8KB
+		timeouts {
+			read_header 5s
+			read_body 5s
+			write 15s
+			idle 15s
+		}
+	}
+}
+
+http://:8080 {
+	@allowed {
+		method GET HEAD
+		expression {http.request.orig_uri} in ['/report.html', '/healthz', '/readyz']
+	}
+	handle @allowed {
+		reverse_proxy http://127.0.0.1:8081 {
+			header_up -*
+			header_up Host 127.0.0.1:8081
+			header_up User-Agent ""
+			transport http {
+				network_proxy none
+				compression off
+				max_conns_per_host 4
+				max_response_header 8KB
+				dial_timeout 2s
+				response_header_timeout 2s
+				read_timeout 12s
+				write_timeout 2s
+			}
+		}
+	}
+	handle {
+		respond "Not found" 404
+	}
+}

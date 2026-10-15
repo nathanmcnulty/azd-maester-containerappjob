@@ -41,8 +41,28 @@ jobs:
           }
       - name: Install test dependencies
         run: Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force
+      - name: Install pinned Caddy validation binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime="$RUNNER_TEMP/caddy-2.11.7"
+          archive="$RUNNER_TEMP/caddy-2.11.7-linux-amd64.tar.gz"
+          mkdir "$runtime"
+          curl --fail --location --output "$archive" 'https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_linux_amd64.tar.gz'
+          echo "727b91701a392de6ebc5027509f548bf39979e5216340d0faed8fa5e69c84f8b  $archive" | sha256sum --check
+          tar -xzf "$archive" -C "$runtime" caddy
+          chmod +x "$runtime/caddy"
+          echo "$runtime" >> "$GITHUB_PATH"
       - name: Run repository tests
         run: Invoke-Pester -Path ./tests -CI
+      - name: Validate real Caddy and worker boundary
+        run: |
+          $caddy = (Get-Command caddy -CommandType Application).Source
+          if ((& $caddy version) -notmatch '^v2\.11\.7 ') { throw 'Unexpected Caddy version.' }
+          & $caddy validate --config ./viewer/Caddyfile --adapter caddyfile
+          if ($LASTEXITCODE) { throw 'Caddy configuration is invalid.' }
+          & ./tests/Test-ProxyHeaders.ps1 -CaddyPath $caddy -ConfigPath ./viewer/Caddyfile -OutputDirectory (Join-Path $env:RUNNER_TEMP 'viewer-header-proof')
+          & ./tests/Test-ViewerProxy.ps1 -Root $PWD.Path -CaddyPath $caddy -ConfigPath ./viewer/Caddyfile -OutputDirectory (Join-Path $env:RUNNER_TEMP 'viewer-proxy-proof')
       - name: Parse PowerShell
         run: |
           $errors = @()
