@@ -61,6 +61,34 @@ build failure does not satisfy the negative check. Inventories and the negative
 build log are retained with the image proof. A Debian package inventory is not a
 complete SBOM for the copied PowerShell/Caddy archives or application source.
 
+CI additionally retains Buildx `--metadata-file` output with maximum provenance
+for all three builds and the Buildx version. The runtime records must bind their
+config digest to the exact image IDs exercised by the smoke check. These are
+unsigned local build records. Loading into Docker's local image store does not
+retain registry-attached attestations; this is not signed release provenance.
+
+SHA-pinned Syft 1.54.1 scans Docker archives exported by those exact runtime image
+IDs. The scanner runs in a private network namespace, disables update/enrichment
+and Go license-cache lookups, and scans the local archive without a registry resolver.
+It emits Syft JSON and SPDX 2.3 with file SHA-256 metadata. Validation requires
+every independently queried Debian package/version/architecture, the expected
+PowerShell or Caddy runtime package, and exact copied viewer source/configuration
+and approved Maester template hashes. Every cataloged package must also appear
+in SPDX with the same purl and version. Raw config bytes must hash to the tested
+image ID, and the SPDX root must describe the scanned archive manifest. An
+archive manifest can differ from BuildKit's output manifest due to export
+representation; both are recorded separately and bound through the same config
+digest. The final receipt hashes the build metadata, independent inventory and
+both SBOM files, and records the actual checked-out Git commit (which can be a
+PR merge commit). Large transport archives are removed only after validation;
+failed-scan artifacts remain for diagnosis.
+
+This verifies selected package and file coverage, not universal dependency
+completeness. In particular, hashing the locked Maester HTML template does not
+recover the npm dependency composition of its embedded minified JavaScript.
+That composition, vulnerability review, registry publication and signed release
+attestations remain open before deployment acceptance.
+
 The [hosted viewer-image job](https://github.com/nathanmcnulty/azd-maester-containerappjob/actions/runs/38831862245) passed against commit `245831b8431b5175f0f9d9e7d961332901e9b4c0`. Its retained proof binds both tested local image IDs. The preserved first run exposed an expected negative cleanup probe leaking a nonzero caller exit status; the reviewed repair preserves real failures and clears only successful completion.
 
 This proves image construction, nonroot/read-only execution, fixed process
@@ -68,7 +96,7 @@ defaults, local sidecar routing, and signal lifecycle. It does not prove a
 registry artifact digest, complete SBOM/signature/provenance,
 Azure managed-identity or Blob authority, report-content safety, ingress
 authorization, deployment, or human-visible delivery. Complete SBOM coverage,
-provenance, signing and registry publication remain release gates.
+release provenance, signing and registry publication remain release gates.
 
 Sources: [Docker Official Debian image](https://hub.docker.com/_/debian/),
 [Debian Snapshot usage](https://snapshot.debian.org/),

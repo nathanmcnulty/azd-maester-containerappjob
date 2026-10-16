@@ -25,7 +25,7 @@ function Assert-Sequence($Actual,$Expected,[string]$Name){if(($Actual-join"`0")-
 function Export-ImageDebianInventory([string]$Image,[string]$Name) {
   $imageInspect=(Invoke-Docker @('image','inspect',$Image)).Output|ConvertFrom-Json
   $imageId=[string]$imageInspect[0].Id;Assert-Match $imageId '^sha256:[0-9a-f]{64}$' "$Name inventory image ID"
-  $inventory=(Invoke-Docker @('run','--rm','--network','none','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges','--entrypoint','/usr/bin/dpkg-query',$Image,'-W','-f=${Package}\t${Version}\t${Architecture}\n')).Output
+  $inventory=(Invoke-Docker @('run','--rm','--network','none','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges','--entrypoint','/usr/bin/dpkg-query',$imageId,'-W','-f=${Package}\t${Version}\t${Architecture}\n')).Output
   [string[]]$lines=$inventory.TrimEnd("`r","`n")-split'\r?\n'
   if($lines.Count-eq 0){throw 'Debian inventory is empty.'}
   foreach($line in $lines){Assert-Match $line '^[a-z0-9][a-z0-9+.-]*\t[^\t\r\n]+\t(?:all|amd64)$' "$Name inventory row"}
@@ -55,6 +55,7 @@ try {
   $caddyInspect=(Invoke-Docker @('image','inspect',$CaddyImage)).Output|ConvertFrom-Json
   $workerImageId=[string]$workerInspect[0].Id;$caddyImageId=[string]$caddyInspect[0].Id
   Assert-Match $workerImageId '^sha256:[0-9a-f]{64}$' workerImageId;Assert-Match $caddyImageId '^sha256:[0-9a-f]{64}$' caddyImageId
+  $WorkerImage=$workerImageId;$CaddyImage=$caddyImageId
   Assert-Equal $workerInspect[0].Config.User '65532:65532' workerUser;Assert-Equal $caddyInspect[0].Config.User '65532:65532' caddyUser
   Assert-Sequence $workerInspect[0].Config.Entrypoint @('/opt/microsoft/powershell/7/pwsh','-NoLogo','-NoProfile','-NonInteractive','-File','/opt/maester-viewer/scripts/Start-MaesterViewer.ps1') workerEntrypoint
   Assert-Sequence $caddyInspect[0].Config.Entrypoint @('/usr/local/bin/caddy','run','--config','/etc/caddy/Caddyfile','--adapter','caddyfile') caddyEntrypoint

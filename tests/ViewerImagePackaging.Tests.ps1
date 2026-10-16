@@ -35,9 +35,9 @@ Describe 'Viewer image packaging contract' {
     $dockerfile|Should -Match ([regex]::Escape('ENTRYPOINT ["/usr/local/bin/caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]'))
     $dockerfile|Should -Not -Match '(?m)^VOLUME '
     $dockerfile|Should -Not -Match '(?m)^CMD '
-    $workflow|Should -Match 'docker build --platform linux/amd64 --target worker'
-    $workflow|Should -Match 'docker build --platform linux/amd64 --target caddy'
+    $workflow|Should -Match 'docker buildx build [^\r\n]+--platform linux/amd64 --target worker'
+    $workflow|Should -Match 'docker buildx build [^\r\n]+--platform linux/amd64 --target caddy'
     $workflow|Should -Match 'Test-ViewerImage\.ps1'
-    $workflow|Should -Match 'if: always\(\)[\s\S]+actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9[\s\S]+path: \$\{\{ runner\.temp \}\}/viewer-image-proof'
+    $workflow|Should -Match 'if: always\(\)[\s\S]+actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9[\s\S]+\$\{\{ runner\.temp \}\}/viewer-image-proof'
   }
 }

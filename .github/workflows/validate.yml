@@ -108,19 +108,40 @@ jobs:
           echo "$runtime" >> "$GITHUB_PATH"
       - name: Build viewer images
         shell: bash
+        env:
+          BUILDX_METADATA_PROVENANCE: max
         run: |
           set -euo pipefail
           test "$(pwsh -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion.ToString()')" = '7.6.6'
-          docker build --platform linux/amd64 --target artifacts --file viewer/Dockerfile --tag maester-viewer-build:ci .
-          docker build --platform linux/amd64 --target worker --file viewer/Dockerfile --tag maester-viewer-worker:ci .
-          docker build --platform linux/amd64 --target caddy --file viewer/Dockerfile --tag maester-viewer-caddy:ci .
+          proof="$RUNNER_TEMP/viewer-build-proof"
+          mkdir "$proof"
+          docker buildx version > "$proof/buildx-version.txt"
+          docker buildx build --load --metadata-file "$proof/artifacts.json" --platform linux/amd64 --target artifacts --file viewer/Dockerfile --tag maester-viewer-build:ci .
+          docker buildx build --load --metadata-file "$proof/worker.json" --platform linux/amd64 --target worker --file viewer/Dockerfile --tag maester-viewer-worker:ci .
+          docker buildx build --load --metadata-file "$proof/caddy.json" --platform linux/amd64 --target caddy --file viewer/Dockerfile --tag maester-viewer-caddy:ci .
       - name: Smoke viewer images
         run: ./tests/Test-ViewerImage.ps1 -ArtifactsImage maester-viewer-build:ci -WorkerImage maester-viewer-worker:ci -CaddyImage maester-viewer-caddy:ci -OutputDirectory (Join-Path $env:RUNNER_TEMP 'viewer-image-proof')
+      - name: Install pinned Syft
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime="$RUNNER_TEMP/syft-1.54.1"
+          archive="$RUNNER_TEMP/syft-1.54.1-linux-amd64.tar.gz"
+          mkdir "$runtime"
+          curl --fail --location --output "$archive" 'https://github.com/anchore/syft/releases/download/v1.54.1/syft_1.54.1_linux_amd64.tar.gz'
+          echo "c069905b391cc4c20a5ba65ad5c10be2a7ba074f8ea6ad203e24d14e303dad47  $archive" | sha256sum --check
+          tar -xzf "$archive" -C "$runtime" syft
+          chmod +x "$runtime/syft"
+      - name: Generate and verify offline runtime SBOMs
+        run: ./tests/Test-ViewerSbom.ps1 -BuildDirectory (Join-Path $env:RUNNER_TEMP 'viewer-build-proof') -SmokeDirectory (Join-Path $env:RUNNER_TEMP 'viewer-image-proof') -OutputDirectory (Join-Path $env:RUNNER_TEMP 'viewer-sbom-proof') -SyftPath (Join-Path $env:RUNNER_TEMP 'syft-1.54.1/syft')
       - name: Upload viewer image proof
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: viewer-image-proof
-          path: ${{ runner.temp }}/viewer-image-proof
+          path: |
+            ${{ runner.temp }}/viewer-image-proof
+            ${{ runner.temp }}/viewer-build-proof
+            ${{ runner.temp }}/viewer-sbom-proof
           if-no-files-found: warn
           retention-days: 5
