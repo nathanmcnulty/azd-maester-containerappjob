@@ -73,3 +73,41 @@ jobs:
             $errors += @($fileErrors)
           }
           if ($errors.Count) { throw ($errors | Out-String) }
+
+  viewer-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Select PowerShell 7.6.6
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime="$RUNNER_TEMP/powershell-7.6.6"
+          archive="$RUNNER_TEMP/powershell-7.6.6-linux-x64.tar.gz"
+          mkdir "$runtime"
+          curl --fail --location --output "$archive" 'https://github.com/PowerShell/PowerShell/releases/download/v7.6.6/powershell-7.6.6-linux-x64.tar.gz'
+          echo "ddbc4a2d113bbd46d283cfedcbcd117a70caefd7673f41f2b4e0000badf103bc  $archive" | sha256sum --check
+          tar -xzf "$archive" -C "$runtime"
+          chmod +x "$runtime/pwsh"
+          echo "$runtime" >> "$GITHUB_PATH"
+      - name: Build viewer images
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(pwsh -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion.ToString()')" = '7.6.6'
+          docker build --platform linux/amd64 --target worker --file viewer/Dockerfile --tag maester-viewer-worker:ci .
+          docker build --platform linux/amd64 --target caddy --file viewer/Dockerfile --tag maester-viewer-caddy:ci .
+      - name: Smoke viewer images
+        run: ./tests/Test-ViewerImage.ps1 -WorkerImage maester-viewer-worker:ci -CaddyImage maester-viewer-caddy:ci -OutputDirectory (Join-Path $env:RUNNER_TEMP 'viewer-image-proof')
+      - name: Upload viewer image proof
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: viewer-image-proof
+          path: ${{ runner.temp }}/viewer-image-proof
+          if-no-files-found: warn
+          retention-days: 5
