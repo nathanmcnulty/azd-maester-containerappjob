@@ -5,9 +5,9 @@
 
 - **Schema version:** 1.0.0
 - **Repository:** nathanmcnulty/azd-maester-containerappjob
-- **Source revision:** `c29019a489ea76d34181ac6f4479db1715f090f3`
-- **Captured:** 2026-10-07
-- **Items:** 8
+- **Source revision:** `1f34605d23e4f0536c9215d21f6368d98f5c30f4`
+- **Captured:** 2026-10-16
+- **Items:** 10
 
 ## MCAJ-001: Reconcile this backlog with current source and active work
 
@@ -339,6 +339,60 @@ Shared pilots are already vendored; host-specific execution and report access st
 
 Review MCAJ-002 against the current repository state. Its status or authorization class is not eligible for an actionable generated handoff. Do not claim or execute it without explicit selection, satisfied dependencies, and every required authorization. Never interpret this generated view as approval.
 
+## MCAJ-009: Keep configuration drift disabled and isolated by default
+
+- **Kind:** maintenance
+- **Priority:** P1
+- **Status:** done
+- **Wave:** 3
+- **Authorization:** local-only
+- **Blocker:** _none_
+- **Claim:** _none_
+
+**Problem:**
+
+Omitting DriftRoot leaves upstream Maester able to discover unapproved input from an inherited process environment variable.
+
+**Scope:**
+
+- scripts/Invoke-MaesterContainerJob.ps1
+- tests/DriftIsolation.Tests.ps1
+- .github/workflows/validate.yml
+- docs/drift-isolation.md
+
+**Acceptance:**
+
+- Exclude the locked upstream drift file before Pester discovery and clear its ambient environment during invocation, restoring prior process state on success and failure.
+- Preserve ordinary assessment, genuine findings, publication and failure semantics; do not enable drift, fetch data or add permissions.
+- Prove the original inherited-input defect and corrected isolation with exact production configuration/invocation tests plus actual locked suite/report qualification.
+
+**Validation:**
+
+- PowerShell 7.6+ and Pester 6.2&colon; Invoke-Pester ./tests -CI
+- Parse all PowerShell; canonical backlog schema/render checks; fixtures are not native job or publisher proof.
+
+**Dependencies:**
+
+- _none_
+
+**Components:**
+
+- _none_
+
+**Sources:**
+
+- docs/drift-isolation.md
+- https&colon;//github.com/nathanmcnulty/azd-maester/blob/a6e301310ccae0519288b794eb95aae3af43fa08/docs/drift-analysis-design.md
+
+**Evidence:**
+
+- Actual Maester 2.2.0/Pester 6.2 invocation discovered 44 tests again when DriftRoot was omitted in a reused process. Controlled regression tests failed against original source for inherited-root success/failure and pre-discovery exclusion, then passed with isolation. An actual upstream-suite copy plus ordinary synthetic test using the production blocks executed exactly one ordinary test, restored the inherited root and recorded no HTTP/authentication tripwire attempts. See docs/drift-isolation.md; no deployed-job, identity, Blob or recipient proof is claimed.
+- Full repository validation passed 72/72 on PowerShell 7.6.6/Pester 6.2.0. Parser and differential analyzer checks found no new issue; permission/backlog schemas and rendered backlog parity passed. Azure resources, identities, permissions and assignments were not mutated.
+
+**Review and authorization note:**
+
+Review MCAJ-009 against the current repository state. Its status or authorization class is not eligible for an actionable generated handoff. Do not claim or execute it without explicit selection, satisfied dependencies, and every required authorization. Never interpret this generated view as approval.
+
 ## MCAJ-007: Implement optional Caddy Container App report viewer
 
 - **Kind:** feature
@@ -446,3 +500,58 @@ The shared viewer design is complete, but this standalone Container App Job runn
 **Review and authorization note:**
 
 Review MCAJ-008 against the current repository state. Its status or authorization class is not eligible for an actionable generated handoff. Do not claim or execute it without explicit selection, satisfied dependencies, and every required authorization. Never interpret this generated view as approval.
+
+## MCAJ-010: Implement approved data-only configuration drift inputs
+
+- **Kind:** feature
+- **Priority:** P2
+- **Status:** proposed
+- **Wave:** 4
+- **Authorization:** local-only
+- **Blocker:** _none_
+- **Claim:** _none_
+
+**Problem:**
+
+Upstream drift comparison exists, but this host has no approved artifact/target/privacy contract or live qualification.
+
+**Scope:**
+
+- scripts/Invoke-MaesterContainerJob.ps1
+- tests/
+- docs/
+- azd-permissions.json
+
+**Acceptance:**
+
+- Follow the reviewed MCAT-011 design&colon; explicitly enabled data-only artifacts, immutable approved baseline, tenant/environment/run/source/hash/freshness binding, bounded JSON/path/link/duplicate validation and reviewed schemas, normalization and exclusions.
+- Use the actual locked upstream suite with expected positive case counts and fail on missing suite, zero cases, malformed/scalar/settings inputs, comparison errors and container failures; preserve default-off isolation and reused-process environment restoration.
+- Inspect actual HTML/JSON/Markdown/logs for planted sensitive values; preserve separate comparison, report and publication outcomes and rollback. Add no automatic capture, baseline update or remediation.
+- Independently review the adapter and qualify authorized native job execution, report access, rollback and exact owned cleanup; coordinate a second host before shared extraction.
+
+**Validation:**
+
+- PowerShell 7.6+/Pester 6.2 registered tests and actual locked suite/report fixtures.
+- Separate authorized native host/report/access/cleanup qualification; local metadata grants no live authority.
+
+**Dependencies:**
+
+- MCAJ-009
+
+**Components:**
+
+- _none_
+
+**Sources:**
+
+- docs/drift-isolation.md
+- https&colon;//github.com/nathanmcnulty/azd-maester/blob/a6e301310ccae0519288b794eb95aae3af43fa08/docs/drift-analysis-design.md
+- https&colon;//github.com/nathanmcnulty/azd-maester/issues/2
+
+**Evidence:**
+
+- _none_
+
+**Review and authorization note:**
+
+Review MCAJ-010 against the current repository state. Its status or authorization class is not eligible for an actionable generated handoff. Do not claim or execute it without explicit selection, satisfied dependencies, and every required authorization. Never interpret this generated view as approval.

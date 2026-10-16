@@ -141,6 +141,14 @@ The generated setup summary in `outputs/<env>-setup-summary.md` includes tracked
 
 ## Runtime behavior
 
+Configuration drift is disabled in this host. The runner excludes the locked
+Maester drift suite before discovery and clears `MAESTER_FOLDER_DRIFT` for the
+invocation, restoring its prior process value afterward even on failure.
+An inherited environment variable cannot select unapproved baseline/current
+files for assessment or report publication. Optional approved drift inputs and
+their live qualification remain future work under MCAJ-010; MCAJ-009 records
+the default-off isolation fix. See [the qualification evidence](docs/drift-isolation.md).
+
 - Weekly schedule (Sunday midnight UTC). To run at a different time or frequency, edit the `cronExpression` in `infra/main.bicep` (e.g. `'30 6 * * 1'` for Monday 6:30 UTC), then re-run `azd provision`.
 - Default image: `mcr.microsoft.com/powershell:lts-mariner-2.0` (modules installed at startup)
 - With `-IncludeACR`: custom image with modules pre-installed (faster startup)
