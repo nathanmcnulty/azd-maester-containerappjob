@@ -341,6 +341,11 @@ if (-not $testsPath) {
 Write-Output "Using Maester test path: $testsPath"
 
 $pesterConfig = [PesterConfiguration]@{
+  Run = @{
+    # Drift is not an enabled host feature. Exclude it before BeforeDiscovery can
+    # read ambient input or encounter an unqualified empty/scalar configuration.
+    ExcludePath = @((Join-Path $testsPath 'Maester/Drift/MT1060Drift.tests.ps1'))
+  }
   TestRegistry = @{
     Enabled = $false
   }
@@ -360,11 +365,16 @@ if (-not [string]::IsNullOrWhiteSpace($MailRecipient)) {
 }
 
 Write-Output "Running Invoke-Maester from test path '$testsPath'"
+$previousDriftRoot = [Environment]::GetEnvironmentVariable('MAESTER_FOLDER_DRIFT', 'Process')
 try {
+  [Environment]::SetEnvironmentVariable('MAESTER_FOLDER_DRIFT', $null, 'Process')
   Invoke-Maester @maesterInvokeParameters
 }
 catch {
   throw "Invoke-Maester failed: $($_.Exception.Message)"
+}
+finally {
+  [Environment]::SetEnvironmentVariable('MAESTER_FOLDER_DRIFT', $previousDriftRoot, 'Process')
 }
 Write-Output 'Invoke-Maester execution completed.'
 
