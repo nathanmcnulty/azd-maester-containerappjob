@@ -27,7 +27,7 @@ BeforeAll {
           @{versionInfo='2.36';externalRefs=@(@{referenceType='purl';referenceLocator='pkg:deb/debian/libc6@2.36?arch=amd64'})},
           @{versionInfo='7.6.6';externalRefs=@(@{referenceType='purl';referenceLocator='pkg:nuget/System.Management.Automation@7.6.6'})}
         )
-        files=@(@{fileName='./opt/viewer.ps1';checksums=@(@{algorithm='SHA256';checksumValue=$hash})})
+        files=@(@{fileName='opt/viewer.ps1';checksums=@(@{algorithm='SHA256';checksumValue=$hash})})
       }
       DebianInventory=@("libc6`t2.36`tamd64")
       RequiredFiles=@{'/opt/viewer.ps1'=$hash}
@@ -49,6 +49,27 @@ Describe 'Runtime SBOM evidence binding' {
     $fixture=New-SbomFixture
     $fixture.BuildMetadata['containerimage.config.digest']='sha256:'+('b'*64)
     {Assert-ViewerSbom @fixture}|Should -Throw '*Build config digest*'
+  }
+  It 'accepts a local Docker exporter config ID without inventing a build manifest' {
+    $fixture=New-SbomFixture
+    $fixture.BuildMetadata.Remove('containerimage.descriptor')
+    $fixture.BuildMetadata['containerimage.digest']=$fixture.ImageId
+    $result=Assert-ViewerSbom @fixture
+    $result.buildManifestDigest|Should -BeNullOrEmpty
+    $result.buildExporterDigest|Should -BeExactly $fixture.ImageId
+  }
+  It 'rejects an unknown exporter digest without a descriptor' {
+    $fixture=New-SbomFixture
+    $fixture.BuildMetadata.Remove('containerimage.descriptor')
+    $fixture.BuildMetadata['containerimage.digest']='sha256:'+('b'*64)
+    {Assert-ViewerSbom @fixture}|Should -Throw '*Unrecognized build exporter digest*'
+  }
+  It 'accepts equivalent SPDX root-relative file names: <fileName>' -ForEach @(
+    @{fileName='/opt/viewer.ps1'},@{fileName='./opt/viewer.ps1'}
+  ) {
+    $fixture=New-SbomFixture
+    $fixture.Spdx.files[0].fileName=$fileName
+    (Assert-ViewerSbom @fixture).requiredFiles|Should -Be 1
   }
   It 'rejects self-declared image identity with different raw config bytes' {
     $fixture=New-SbomFixture

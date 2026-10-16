@@ -16,8 +16,16 @@ function Assert-ViewerSbom {
   $ErrorActionPreference='Stop'
   if($ImageId-cnotmatch'^sha256:[0-9a-f]{64}$'){throw 'Invalid expected image ID.'}
   if($BuildMetadata['containerimage.config.digest']-cne$ImageId){throw 'Build config digest differs from tested image.'}
-  if($BuildMetadata['containerimage.digest']-cnotmatch'^sha256:[0-9a-f]{64}$'-or
-    $BuildMetadata['containerimage.descriptor'].digest-cne$BuildMetadata['containerimage.digest']){throw 'Missing or inconsistent build manifest digest.'}
+  $exporterDigest=$BuildMetadata['containerimage.digest']
+  if($exporterDigest-cnotmatch'^sha256:[0-9a-f]{64}$'){throw 'Missing build exporter digest.'}
+  $buildManifest=$null
+  if($BuildMetadata.Contains('containerimage.descriptor')){
+    if($BuildMetadata['containerimage.descriptor'].digest-cne$exporterDigest){throw 'Inconsistent build manifest digest.'}
+    $buildManifest=$exporterDigest
+  }elseif($exporterDigest-cne$ImageId){
+    # Docker's local exporter reports the config ID here, without a descriptor.
+    throw 'Unrecognized build exporter digest without a manifest descriptor.'
+  }
   if(-not$BuildMetadata['buildx.build.provenance'].buildType-or-not$BuildMetadata['buildx.build.ref']){throw 'Missing BuildKit provenance or build reference.'}
   if($Syft.descriptor.name-cne'syft'-or$Syft.descriptor.version-cne'1.54.1'){throw 'Unexpected SBOM producer.'}
   if($Syft.source.type-cne'image'-or$Syft.source.metadata.imageID-cne$ImageId-or
@@ -63,9 +71,10 @@ function Assert-ViewerSbom {
     if($expected-cnotmatch'^[0-9a-f]{64}$'){throw 'Invalid required file hash.'}
     $files=@($Syft.files|Where-Object { $_.location.path-ceq$path })
     if($files.Count-ne 1-or@($files[0].digests|Where-Object { $_.algorithm-ceq'sha256'-and$_.value-ceq$expected }).Count-ne 1){throw "Syft application file hash mismatch: $path."}
-    $converted=@($Spdx.files|Where-Object { ($_.fileName-replace'^\./','/')-ceq$path })
+    $validNames=@($path,$path.Substring(1),".$path")
+    $converted=@($Spdx.files|Where-Object { $validNames-ccontains$_.fileName })
     if($converted.Count-ne 1-or@($converted[0].checksums|Where-Object { $_.algorithm-ceq'SHA256'-and$_.checksumValue-ceq$expected }).Count-ne 1){throw "SPDX application file hash mismatch: $path."}
   }
-  [pscustomobject]@{imageId=$ImageId;buildManifestDigest=$BuildMetadata['containerimage.digest'];archiveManifestDigest=$manifestId;debianPackages=$DebianInventory.Count;catalogedPackages=@($Syft.artifacts).Count;requiredFiles=$RequiredFiles.Count}
+  [pscustomobject]@{imageId=$ImageId;buildExporterDigest=$exporterDigest;buildManifestDigest=$buildManifest;archiveManifestDigest=$manifestId;debianPackages=$DebianInventory.Count;catalogedPackages=@($Syft.artifacts).Count;requiredFiles=$RequiredFiles.Count}
 }
 Export-ModuleMember -Function Assert-ViewerSbom

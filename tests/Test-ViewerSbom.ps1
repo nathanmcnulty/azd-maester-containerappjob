@@ -35,8 +35,8 @@ foreach($name in 'worker','caddy'){
       $files["/opt/maester-viewer/scripts/$file"]=(Get-FileHash (Join-Path $root "scripts/$file") -Algorithm SHA256).Hash
     }
     $files['/opt/maester-viewer/assets/ReportTemplate.html']='a7b8dae3d5932c3096fa98709aaab9e9c1ebbfb83b5519e524b734ec751e3416'
-    $runtime='System.Management.Automation';$version='7.6.6'
-    $locations=@('/opt/microsoft/powershell/7/pwsh.deps.json','/opt/microsoft/powershell/7/System.Management.Automation.dll')
+    $runtime='pwsh';$version='7.6.6.500'
+    $locations=@('/opt/microsoft/powershell/7/pwsh.deps.json','/opt/microsoft/powershell/7/pwsh.dll')
   }else{
     $files['/etc/caddy/Caddyfile']=(Get-FileHash (Join-Path $root 'viewer/Caddyfile') -Algorithm SHA256).Hash
     $runtime='github.com/caddyserver/caddy/v2';$version='v2.11.7'

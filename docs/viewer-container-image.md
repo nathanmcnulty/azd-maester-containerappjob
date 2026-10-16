@@ -76,15 +76,21 @@ PowerShell or Caddy runtime package, and exact copied viewer source/configuratio
 and approved Maester template hashes. Every cataloged package must also appear
 in SPDX with the same purl and version. Raw config bytes must hash to the tested
 image ID, and the SPDX root must describe the scanned archive manifest. An
-archive manifest can differ from BuildKit's output manifest due to export
-representation; both are recorded separately and bound through the same config
-digest. The final receipt hashes the build metadata, independent inventory and
+archive manifest can differ from a BuildKit output manifest due to export
+representation. Docker's local exporter instead reports the config ID as its
+exporter digest and supplies no manifest descriptor. The receipt distinguishes
+that case explicitly: it records no build manifest digest, while requiring the
+exporter digest to equal the tested config ID. When a descriptor is present,
+its digest must match the exporter digest. Both records bind through the config
+ID. The final receipt hashes the build metadata, independent inventory and
 both SBOM files, and records the actual checked-out Git commit (which can be a
 PR merge commit). Large transport archives are removed only after validation;
 failed-scan artifacts remain for diagnosis.
 
 This verifies selected package and file coverage, not universal dependency
-completeness. In particular, hashing the locked Maester HTML template does not
+completeness. The selected PowerShell package is the `pwsh/7.6.6.500` dependency
+manifest entry in the pinned 7.6.6 runtime; not every bundled assembly has an
+independently cataloged package identity. In particular, hashing the locked Maester HTML template does not
 recover the npm dependency composition of its embedded minified JavaScript.
 That composition, vulnerability review, registry publication and signed release
 attestations remain open before deployment acceptance.
