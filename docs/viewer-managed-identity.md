@@ -40,14 +40,32 @@ entrypoint similarly closes runtime failures and disposes the credential owner.
 The runnable script supervises cancellation from console interruption and, on
 non-Windows hosts, `SIGTERM`.
 
-This is source wiring only. A caller still must configure exactly one reviewed
-user-assigned identity and grant it the required container-scoped Blob Data
-Reader authority. Infrastructure, role assignment, image packaging and
-provenance, Container Apps deployment, ingress/Entra authorization, cold-start
-behavior, and native managed-identity acceptance remain separate qualification
-work. Handler fixtures prove the request and failure contracts without Azure
-authority. The clean-process fixture proves local composition and lifecycle,
-not a deployed Container App or a successful managed-identity token exchange.
+The reviewed source passed all 139 repository tests on PowerShell 7.6.6 locally
+and in Linux CI, including the runnable process and Linux cancellation path.
+A disposable, no-ingress Container Apps Job then ran the exact source from
+commit `60b8f15aebf71c91e81a16344a08720c38dd5c5c` with file hashes verified
+before import. All 13 native checks passed on PowerShell 7.6.6: the selected
+user-assigned identity acquired a storage token, read the exact private
+synthetic Unicode report, and reused its bounded token cache. Archive listing
+and projection writes both returned HTTP 403 with
+`AuthorizationPermissionMismatch`; the report remained unchanged. An unknown
+identity failed without fallback. The actual runnable viewer reached readiness,
+served the exact report bytes, handled Linux `SIGTERM` with exit code zero,
+emitted no child output, and released its listener.
+
+The native job used only a projection-container Blob Data Reader assignment for
+the viewer identity. It had no ingress, archive permission, or end-user audience.
+The temporary publisher assignment and owned lab resources were removed and
+absence verified after testing. Failed deployment evidence was preserved.
+
+This remains unwired source. A caller still must configure exactly one reviewed
+user-assigned identity and its container-scoped reader role. Production image
+packaging, signing/SBOM/provenance, runner publication, reviewed shared component
+pin, infrastructure integration, HTTPS ingress/Entra authorization with concrete
+allowed and denied users, real report assets, cold-start/scale behavior, and
+rollback qualification remain open. The synthetic job proves the managed
+identity and runnable worker boundary; it does not establish end-user report
+delivery or qualify a production container image.
 
 The platform contract follows Microsoft Learn's [managed identities in Azure
 Container Apps](https://learn.microsoft.com/azure/container-apps/managed-identity).
