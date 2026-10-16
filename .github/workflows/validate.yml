@@ -111,10 +111,11 @@ jobs:
         run: |
           set -euo pipefail
           test "$(pwsh -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion.ToString()')" = '7.6.6'
+          docker build --platform linux/amd64 --target artifacts --file viewer/Dockerfile --tag maester-viewer-build:ci .
           docker build --platform linux/amd64 --target worker --file viewer/Dockerfile --tag maester-viewer-worker:ci .
           docker build --platform linux/amd64 --target caddy --file viewer/Dockerfile --tag maester-viewer-caddy:ci .
       - name: Smoke viewer images
-        run: ./tests/Test-ViewerImage.ps1 -WorkerImage maester-viewer-worker:ci -CaddyImage maester-viewer-caddy:ci -OutputDirectory (Join-Path $env:RUNNER_TEMP 'viewer-image-proof')
+        run: ./tests/Test-ViewerImage.ps1 -ArtifactsImage maester-viewer-build:ci -WorkerImage maester-viewer-worker:ci -CaddyImage maester-viewer-caddy:ci -OutputDirectory (Join-Path $env:RUNNER_TEMP 'viewer-image-proof')
       - name: Upload viewer image proof
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

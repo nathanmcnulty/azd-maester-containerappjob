@@ -1,6 +1,7 @@
 #Requires -Version 7.6
 [CmdletBinding()]
 param(
+  [Parameter(Mandatory)][string]$ArtifactsImage,
   [Parameter(Mandatory)][string]$WorkerImage,
   [Parameter(Mandatory)][string]$CaddyImage,
   [Parameter(Mandatory)][string]$OutputDirectory
@@ -21,6 +22,34 @@ function Add-Record([string]$Name,$Value){$records.Add([pscustomobject]@{name=$N
 function Assert-Equal($Actual,$Expected,[string]$Name){if($Actual-cne$Expected){throw "$Name did not match."}}
 function Assert-Match([string]$Actual,[string]$Pattern,[string]$Name){if($Actual-cnotmatch$Pattern){throw "$Name did not match."}}
 function Assert-Sequence($Actual,$Expected,[string]$Name){if(($Actual-join"`0")-cne($Expected-join"`0")){throw "$Name did not match."}}
+function Export-ImageDebianInventory([string]$Image,[string]$Name) {
+  $imageInspect=(Invoke-Docker @('image','inspect',$Image)).Output|ConvertFrom-Json
+  $imageId=[string]$imageInspect[0].Id;Assert-Match $imageId '^sha256:[0-9a-f]{64}$' "$Name inventory image ID"
+  $inventory=(Invoke-Docker @('run','--rm','--network','none','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges','--entrypoint','/usr/bin/dpkg-query',$Image,'-W','-f=${Package}\t${Version}\t${Architecture}\n')).Output
+  [string[]]$lines=$inventory.TrimEnd("`r","`n")-split'\r?\n'
+  if($lines.Count-eq 0){throw 'Debian inventory is empty.'}
+  foreach($line in $lines){Assert-Match $line '^[a-z0-9][a-z0-9+.-]*\t[^\t\r\n]+\t(?:all|amd64)$' "$Name inventory row"}
+  [Array]::Sort($lines,[StringComparer]::Ordinal)
+  $file=Join-Path $OutputDirectory "$Name-debian-packages.tsv"
+  [IO.File]::WriteAllText($file,($lines-join"`n")+"`n",[Text.UTF8Encoding]::new($false))
+  Add-Record "${Name}DebianInventory" ([ordered]@{imageId=$imageId;packages=$lines.Count;file=[IO.Path]::GetFileName($file);sha256=(Get-FileHash $file -Algorithm SHA256).Hash})
+}
+function Test-RejectedAptMetadata {
+  $root=Split-Path $PSScriptRoot -Parent
+  $context=Join-Path $OutputDirectory 'invalid-metadata-context'
+  $viewer=Join-Path $context 'viewer';$null=New-Item -ItemType Directory -Path $viewer
+  foreach($name in 'Dockerfile','debian-snapshot.sources'){Copy-Item (Join-Path $root "viewer/$name") (Join-Path $viewer $name)}
+  $manifest=[IO.File]::ReadAllText((Join-Path $root 'viewer/debian-inrelease.sha256'))
+  $altered=[regex]::Replace($manifest,'\A[0-9a-f]{64}',('0'*64))
+  if($altered-ceq$manifest){throw 'Negative metadata fixture did not change its expected hash.'}
+  [IO.File]::WriteAllText((Join-Path $viewer 'debian-inrelease.sha256'),$altered,[Text.UTF8Encoding]::new($false))
+  $rejected=Invoke-Docker @('build','--platform','linux/amd64','--target','pinned-apt','--file',(Join-Path $viewer 'Dockerfile'),$context) -AllowFailure
+  [IO.File]::WriteAllText((Join-Path $OutputDirectory 'invalid-metadata.log'),$rejected.Output,[Text.UTF8Encoding]::new($false))
+  if($rejected.ExitCode-eq 0){throw 'Modified APT metadata hash was accepted.'}
+  Assert-Match $rejected.Output 'InRelease: FAILED' metadataHashFailure
+  Assert-Match $rejected.Output '1 computed checksum did NOT match' metadataFailureReason
+  Add-Record modifiedMetadataRejected $true
+}
 try {
   $workerInspect=(Invoke-Docker @('image','inspect',$WorkerImage)).Output|ConvertFrom-Json
   $caddyInspect=(Invoke-Docker @('image','inspect',$CaddyImage)).Output|ConvertFrom-Json
@@ -34,6 +63,10 @@ try {
   Assert-Equal (Invoke-Docker @('run','--rm','--entrypoint','/usr/bin/id',$WorkerImage,'-u')).Output.Trim() '65532' workerRuntimeUser
   Assert-Match (Invoke-Docker @('run','--rm','--entrypoint','/usr/local/bin/caddy',$CaddyImage,'version')).Output '^v2\.11\.7 ' caddyVersion
   $null=Invoke-Docker @('run','--rm','--read-only','--tmpfs','/tmp:rw,noexec,nosuid,nodev,size=16m','--cap-drop','ALL','--security-opt','no-new-privileges','--entrypoint','/usr/local/bin/caddy',$CaddyImage,'validate','--config','/etc/caddy/Caddyfile','--adapter','caddyfile')
+  Export-ImageDebianInventory $ArtifactsImage artifacts
+  Export-ImageDebianInventory $WorkerImage worker
+  Export-ImageDebianInventory $CaddyImage caddy
+  Test-RejectedAptMetadata
 
   $identity=@'
 {
