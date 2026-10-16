@@ -3,7 +3,7 @@
   "solutionId": "azd-maester-containerappjob",
   "status": "implemented",
   "coverage": "partial",
-  "reviewedOn": "2026-10-07",
+  "reviewedOn": "2026-10-16",
   "requirements": [
     {
       "resource": "https://graph.microsoft.com",
@@ -440,6 +440,24 @@
           "sha256": "e43b6e4ce60c9adef30355cc126519e5f754c01630c94fca9d85c04aebde3548"
         }
       ]
+    },
+    {
+      "resource": "Microsoft.Storage/storageAccounts/blobServices/containers/viewer-projection",
+      "kind": "azure-rbac",
+      "permission": "Storage Blob Data Reader",
+      "principal": "viewer-user-assigned-identity",
+      "phase": "runtime",
+      "feature": "viewer-private-foundation",
+      "defaultEnabled": false,
+      "scope": "container",
+      "rationale": "Unwired private foundation source assigns the dedicated viewer identity read-only access to the exact projection container; no deployment adoption or effective grant is claimed.",
+      "evidenceState": "code",
+      "evidence": [
+        {
+          "path": "infra/modules/maester-viewer-private.bicep",
+          "sha256": "41dc79b9cb6ae6a50034739a4d8ed0e81ff91c88a967d6e37352c67563bc9a5e"
+        }
+      ]
     }
   ],
   "gaps": [
@@ -449,6 +467,8 @@
     "Optional Exchange setup is not inventoried: Exchange.ManageAsApp, Exchange RBAC View-Only Configuration, RoleManagement.ReadWrite.Directory used by the shared advanced-setup connection, and its cleanup authority.",
     "Optional Teams setup is not inventoried: Teams Reader Entra directory role, RoleManagement.ReadWrite.Directory used by the shared advanced-setup connection, and its cleanup authority.",
     "Optional Azure setup is not inventoried: workload Reader at operator-selected subscription/resource-group/management-group scopes and the operator authority used to create those assignments.",
-    "Optional report web app setup is not inventoried: Website Contributor for the workload, Group.Read.All/Directory.Read.All when resolving a group name, Application.ReadWrite.All/Directory.Read.All/DelegatedPermissionGrant.ReadWrite.All for Easy Auth, and the tenant-wide openid/profile/email/User.Read delegated grant."
+    "Optional report web app setup is not inventoried: Website Contributor for the workload, Group.Read.All/Directory.Read.All when resolving a group name, Application.ReadWrite.All/Directory.Read.All/DelegatedPermissionGrant.ReadWrite.All for Easy Auth, and the tenant-wide openid/profile/email/User.Read delegated grant.",
+    "The default-off private viewer projection source is integrated with the runner and reader image. Unreferenced private-foundation and authentication modules declare a dedicated read-only viewer identity and an Entra group policy in source. Deployment adoption, projection-container creation, publisher binding, public ingress, native authentication, signature/provenance proof, and effective grants remain unqualified; the publisher still requires a separately reviewed container-scoped Storage Blob Data Contributor path.",
+    "The unreferenced viewer authentication module requires deployment-operator authority to read the selected Container App and write its authConfigs child. Operator permissions, the pre-existing Entra application and client-secret lifecycle, token group claims and assignment configuration are not provisioned or qualified by this module. It adds no runtime Graph permission or Azure role assignment."
   ]
 }

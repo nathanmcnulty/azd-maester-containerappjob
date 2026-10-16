@@ -1,0 +1,12 @@
+check-for-app-update: false
+scope: squashed
+parallelism: 2
+enrich: []
+file:
+  metadata:
+    selection: all
+    digests: [sha256]
+golang:
+  search-local-mod-cache-licenses: false
+  search-local-vendor-licenses: false
+  search-remote-licenses: false

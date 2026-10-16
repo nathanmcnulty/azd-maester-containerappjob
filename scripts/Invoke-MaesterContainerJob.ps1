@@ -26,6 +26,43 @@ function ConvertTo-BoolOrDefault {
   }
 }
 
+function Get-MaesterViewerRunnerConfiguration {
+  param([string]$Enabled,[string]$TenantId,[string]$Environment,[string]$StorageAccount,[string]$Container)
+  if ([string]::IsNullOrWhiteSpace($Enabled)) { $isEnabled = $false }
+  elseif ($Enabled -ceq 'true') { $isEnabled = $true }
+  elseif ($Enabled -ceq 'false') { $isEnabled = $false }
+  else { throw 'VIEWER_PROJECTION_ENABLED must be exactly true or false.' }
+  if ($isEnabled) {
+    $parsedTenant = [guid]::Empty
+    if (-not [guid]::TryParseExact($TenantId, 'D', [ref]$parsedTenant) -or $parsedTenant -eq [guid]::Empty -or
+        $TenantId -cne $parsedTenant.ToString('D') -or $Environment -cnotmatch '\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z' -or
+        $StorageAccount -cnotmatch '\A[a-z0-9]{3,24}\z' -or $Container -cnotmatch '\A[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])\z' -or $Container -match '--') {
+      throw 'Viewer projection configuration is invalid.'
+    }
+  }
+  [pscustomobject]@{Enabled=$isEnabled;TenantId=$TenantId;Environment=$Environment;StorageAccount=$StorageAccount;Container=$Container}
+}
+
+function Assert-MaesterViewerRunnerTenantBinding {
+  [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification='Validates two authenticated tenant identifiers and performs no mutation.')]
+  [CmdletBinding()]
+  param([Parameter(Mandatory)][string]$ConfiguredTenantId,[AllowNull()][string]$AzTenantId,[AllowNull()][string]$GraphTenantId)
+  if ($AzTenantId -cne $ConfiguredTenantId -or $GraphTenantId -cne $ConfiguredTenantId) { throw 'Viewer projection tenant binding failed.' }
+}
+
+function New-MaesterViewerRunnerProjectionStore {
+  [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification='Constructs an in-memory typed storage callback and performs no storage operation.')]
+  [CmdletBinding()]
+  param([Parameter(Mandatory)][string]$AccountName,[Parameter(Mandatory)][string]$ContainerName,[Parameter(Mandatory)][scriptblock]$TokenProvider)
+  New-MaesterAzureBlobProjectionStore -AccountName $AccountName -ContainerName $ContainerName -TokenProvider $TokenProvider
+}
+
+function ConvertTo-MaesterViewerRunnerProjection {
+  [CmdletBinding()]
+  param([Parameter(Mandatory)][byte[]]$ReportBytes,[Parameter(Mandatory)][byte[]]$TemplateBytes)
+  ConvertTo-MaesterViewerReportProjection -ReportBytes $ReportBytes -TemplateBytes $TemplateBytes -ErrorAction Stop
+}
+
 function Get-PlainToken {
   param([Parameter(Mandatory = $true)][string]$ResourceUrl)
 
@@ -132,6 +169,10 @@ $WebAppName = $env:WEB_APP_NAME
 $WebAppResourceGroupName = $env:WEB_APP_RESOURCE_GROUP_NAME
 $ExportContainer = 'archive'
 $DashboardContainer = 'latest'
+$viewerConfiguration=Get-MaesterViewerRunnerConfiguration -Enabled $env:VIEWER_PROJECTION_ENABLED -TenantId $env:VIEWER_PROJECTION_TENANT_ID `
+  -Environment $env:VIEWER_PROJECTION_ENVIRONMENT -StorageAccount $env:VIEWER_PROJECTION_STORAGE_ACCOUNT -Container $env:VIEWER_PROJECTION_CONTAINER
+$viewerProjectionEnabled=$viewerConfiguration.Enabled;$viewerTenantId=$viewerConfiguration.TenantId;$viewerEnvironment=$viewerConfiguration.Environment
+$viewerStorageAccount=$viewerConfiguration.StorageAccount;$viewerContainer=$viewerConfiguration.Container
 
 if ($includeExchange) {
   $requiredModules += 'ExchangeOnlineManagement'
@@ -176,6 +217,12 @@ try {
   }
 }
 catch {
+}
+
+if ($viewerProjectionEnabled) {
+  $azContext = Get-AzContext -ErrorAction Stop
+  $azTenantId = if ($azContext -and $azContext.Tenant) { [string]$azContext.Tenant.Id } else { $null }
+  Assert-MaesterViewerRunnerTenantBinding -ConfiguredTenantId $viewerTenantId -AzTenantId $azTenantId -GraphTenantId $tenantId
 }
 
 $moera = $null
@@ -360,6 +407,8 @@ if (-not [string]::IsNullOrWhiteSpace($MailRecipient)) {
 }
 
 Write-Output "Running Invoke-Maester from test path '$testsPath'"
+$viewerRunStartedAtUtc = [DateTimeOffset]::UtcNow
+$viewerRunId = [guid]::NewGuid().ToString('D')
 try {
   Invoke-Maester @maesterInvokeParameters
 }
@@ -382,6 +431,22 @@ else {
 }
 
 Write-Output "Maester run completed. Report generated successfully."
+
+# The optional private projection is validated and published before all legacy report writes.
+if ($viewerProjectionEnabled) {
+  Import-Module (Join-Path $PSScriptRoot 'Maester.ViewerProjection.psm1') -Force -ErrorAction Stop
+  Import-Module (Join-Path $PSScriptRoot 'Maester.ViewerContent.psm1') -Force -ErrorAction Stop
+  $viewerTemplatePath = Join-Path $moduleRoot 'assets/ReportTemplate.html'
+  $viewerTemplateBytes = [IO.File]::ReadAllBytes($viewerTemplatePath)
+  $viewerRawBytes = [IO.File]::ReadAllBytes($outputHtmlPath)
+  $viewerQualified = ConvertTo-MaesterViewerRunnerProjection -ReportBytes $viewerRawBytes -TemplateBytes $viewerTemplateBytes
+  $viewerTokenProvider = { (Get-AzAccessToken -ResourceUrl 'https://storage.azure.com/' -AsSecureString -ErrorAction Stop).Token }
+  $viewerStore = New-MaesterViewerRunnerProjectionStore -AccountName $viewerStorageAccount -ContainerName $viewerContainer -TokenProvider $viewerTokenProvider
+  $null = Publish-MaesterViewerProjection -HtmlBytes $viewerQualified.HtmlBytes -TemplateBytes $viewerTemplateBytes `
+    -TenantId $viewerTenantId -Environment $viewerEnvironment -RunId $viewerRunId `
+    -RunStartedAtUtc $viewerRunStartedAtUtc -Store $viewerStore -ErrorAction Stop
+  Write-Output 'Published qualified private viewer projection.'
+}
 
 # ──────────────────────────────────────────────
 # Upload results to storage
