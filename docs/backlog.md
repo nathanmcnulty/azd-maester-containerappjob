@@ -5,7 +5,7 @@
 
 - **Schema version:** 1.0.0
 - **Repository:** nathanmcnulty/azd-maester-containerappjob
-- **Source revision:** `1f34605d23e4f0536c9215d21f6368d98f5c30f4`
+- **Source revision:** `f8510a3d27cdb328999531c7f2d6bc783413a5fa`
 - **Captured:** 2026-10-16
 - **Items:** 10
 
@@ -505,11 +505,14 @@ Review MCAJ-008 against the current repository state. Its status or authorizatio
 
 - **Kind:** feature
 - **Priority:** P2
-- **Status:** proposed
+- **Status:** in-progress
 - **Wave:** 4
 - **Authorization:** local-only
 - **Blocker:** _none_
-- **Claim:** _none_
+- **Claim owner:** codex/root
+- **Claim worktree:** C&colon;/azd-reconciliation-20261016/container-drift-inputs
+- **Claim base revision:** `f8510a3d27cdb328999531c7f2d6bc783413a5fa`
+- **Claim started:** 2026-10-16T13&colon;58&colon;16.3472505+00&colon;00
 
 **Problem:**
 
@@ -521,6 +524,8 @@ Upstream drift comparison exists, but this host has no approved artifact/target/
 - tests/
 - docs/
 - azd-permissions.json
+- scripts/Maester.DriftInputs.psm1
+- docs/drift-input-contract.md
 
 **Acceptance:**
 
@@ -550,7 +555,12 @@ Upstream drift comparison exists, but this host has no approved artifact/target/
 
 **Evidence:**
 
-- _none_
+- 2026-10-16 input-boundary implementation&colon; scripts/Maester.DriftInputs.psm1 requires an independently supplied baseline-manifest digest, exact selected tenant/environment/run/producer, immutable revisions, freshness and declared normalization. Closed reference-free schemas, case/file parity, bounded streaming reads, strict UTF-8/JSON duplicate/depth/object checks and byte hashes precede private verified-byte staging. No host hook, suite enablement, collector, baseline approval or permission change is added.
+- PowerShell 7.6.6/Pester 6.2.0 registered tests pass 112/112, including 40 input-boundary cases. Actual locked Maester 2.2.0 drift-suite qualification consumes two prepared synthetic cases and produces eight checks&colon; seven passes and one intentional drift failure, with no HTTP/authentication tripwire attempt. HTML/JSON/Markdown include the synthetic changed value; this helper does not redact approved data. Native runtime, origin/approval authentication, complete host invocation/discovery accounting, report access, rollback, successful-copy lifecycle cleanup and independently qualified second host remain open.
+- The failed private harness attempts are retained separately&colon; initial file-path selection was refused by Invoke-Maester, and an exact restoration assertion exposed PowerShell null-to-empty conversion in a harness setter. The corrected local harness restores an absent environment variable using NullString.Value. Source helper preparation itself does not change the process drift variable. See docs/drift-input-contract.md for the remaining integration contract.
+- Before publication, root fault injection reproduced a staging-name collision deleting a pre-existing private directory. The repaired error path requires successful creation ownership before cleanup; the collision regression preserves the unrelated sentinel. The earlier candidate/review and failing reproduction are retained privately.
+- Fresh independent security review blocked the candidate for PowerShell boolean/number header coercion, hidden partial-stage deletion failure and trailing-separator overlap. The repaired boundary requires string headers and ordinal binding, canonicalizes ending separators, uses absolute regex ends, rejects padded GUIDs, and reports cleanup failure with only a safe code plus the owned private path in exception data. New regressions cover every current header, baseline header types, culture-equivalent text, path orientations, partial writes, deletion refusal and newline suffixes; no candidate was committed or pushed before review repairs.
+- A further independent review reproduced visually deceptive culture-equivalent schema keyword names being admitted by PowerShell membership comparisons while ignored by the JSON validator. Final grammar membership uses ordinal matching for schema keywords/types/required names and manifest fields, with full-helper fake enum/required regressions. This remains a pre-publication source repair, not deployed acceptance.
 
 **Review and authorization note:**
 

@@ -72,4 +72,9 @@ There is no new permission or collector. Enabling drift still needs approved
 bounded data-only artifacts, tenant/run/source/freshness/hash validation, reviewed
 normalization/exclusions, immutable baseline approval and output privacy checks.
 Native job execution, publication/access, rollback and owned cleanup remain
-separate gates. Other canonical hosts still need their own isolation fixes.
+separate gates. Canonical host rollout is tracked centrally by MCAT-011.
+
+The [approved input helper](drift-input-contract.md) now implements local
+baseline approval-digest, target/run/source/freshness/schema/byte validation and
+private staging. It does not enable the runner or change this disabled boundary;
+MCAJ-010 remains in progress for integration and the gates above.
