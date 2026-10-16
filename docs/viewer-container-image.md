@@ -35,6 +35,8 @@ worker and production Caddy defaults must return health 200 and report 503 when
 Blob is unavailable, then both must exit zero after a bounded container stop.
 Every container receives a separate tmpfs and no report volume.
 
+The [hosted viewer-image job](https://github.com/nathanmcnulty/azd-maester-containerappjob/actions/runs/38831862245) passed against commit `245831b8431b5175f0f9d9e7d961332901e9b4c0`. Its retained proof binds both tested local image IDs. The preserved first run exposed an expected negative cleanup probe leaking a nonzero caller exit status; the reviewed repair preserves real failures and clears only successful completion.
+
 This proves image construction, nonroot/read-only execution, fixed process
 defaults, local sidecar routing, and signal lifecycle. It does not prove a
 registry artifact digest, closed dependency set, SBOM/signature/provenance,
