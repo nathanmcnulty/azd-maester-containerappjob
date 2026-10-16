@@ -28,6 +28,8 @@ public sealed class MaesterProxyHeaderCapture : IDisposable {
                 if (bytes[n-4] == 13 && bytes[n-3] == 10 && bytes[n-2] == 13 && bytes[n-1] == 10) {
                     var response = Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Length: 9\r\nConnection: close\r\n\r\nsynthetic");
                     await stream.WriteAsync(response, stop.Token);
+                    await stream.FlushAsync(stop.Token);
+                    if (await stream.ReadAsync(next, stop.Token) != 0) throw new IOException("Unexpected synthetic request bytes after the response.");
                     return Encoding.ASCII.GetString(headers.ToArray());
                 }
             }
@@ -43,6 +45,7 @@ $caddy = $null
 try {
     foreach ($port in 8080, 2019) {
         $probe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Any, $port)
+        $probe.Server.ExclusiveAddressUse = $true
         try { $probe.Start() } finally { $probe.Stop() }
     }
     $capture.Start(); $proxyCanary.Start()
@@ -79,5 +82,5 @@ try {
 finally {
     if ($caddy) { if (-not$caddy.HasExited) { $caddy.Kill($true); $null = $caddy.WaitForExit(5000) }; $caddy.Dispose() }
     $capture.Dispose(); $proxyCanary.Stop()
-    foreach ($port in 8080, 8081, 2019) { $probe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Any, $port); try { $probe.Start() }finally { $probe.Stop() } }
+    foreach ($port in 8080, 8081, 2019) { $probe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Any, $port); $probe.Server.ExclusiveAddressUse = $true; try { $probe.Start() }finally { $probe.Stop() } }
 }

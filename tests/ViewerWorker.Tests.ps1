@@ -4,23 +4,34 @@ BeforeAll {
     $script:workerFixture = Join-Path $PSScriptRoot 'helpers/Invoke-MaesterViewerWorkerFixture.ps1'
     function Start-WorkerFixture([string]$Case) {
         $probe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+        $probe.Server.ExclusiveAddressUse = $true
         try { $probe.Start(); $port = $probe.LocalEndpoint.Port } finally { $probe.Stop() }
         $ready = Join-Path $TestDrive "$Case-$port.ready"
         $stop = Join-Path $TestDrive "$Case-$port.stop"
         $process = $null
         $client = $null
+        $outputTask = $null
+        $errorTask = $null
         $returned = $false
         try {
             $info = [Diagnostics.ProcessStartInfo]::new((Get-Process -Id $PID).Path)
             $info.UseShellExecute = $false
             $info.CreateNoWindow = $true
+            $info.RedirectStandardOutput = $true
+            $info.RedirectStandardError = $true
             foreach ($argument in @('-NoLogo', '-NoProfile', '-File', $script:workerFixture, '-Case', $Case, '-Root', $script:workerRoot, '-Port', "$port", '-StopPath', $stop, '-ReadyPath', $ready)) {
                 $info.ArgumentList.Add($argument)
             }
             $process = [Diagnostics.Process]::Start($info)
+            $outputTask = $process.StandardOutput.ReadToEndAsync()
+            $errorTask = $process.StandardError.ReadToEndAsync()
             $deadline = [DateTimeOffset]::UtcNow.AddSeconds(8)
             while (-not (Test-Path $ready) -and [DateTimeOffset]::UtcNow -lt $deadline) {
-                if ($process.HasExited) { throw "Worker exited: $Case" }
+                if ($process.HasExited) {
+                    $diagnostic = ($outputTask.GetAwaiter().GetResult() + $errorTask.GetAwaiter().GetResult())
+                    if ($diagnostic.Length -gt 4096) { $diagnostic = $diagnostic.Substring(0, 4096) }
+                    throw "Worker exited before fixture readiness: $Case. $diagnostic"
+                }
                 Start-Sleep -Milliseconds 20
             }
             if (-not (Test-Path $ready)) { throw "Worker fixture did not initialize: $Case" }
@@ -32,21 +43,34 @@ BeforeAll {
             $base = "http://127.0.0.1:$port"
             $deadline = [DateTimeOffset]::UtcNow.AddSeconds(8)
             do {
+                if ($process.HasExited) {
+                    $diagnostic = ($outputTask.GetAwaiter().GetResult() + $errorTask.GetAwaiter().GetResult())
+                    if ($diagnostic.Length -gt 4096) { $diagnostic = $diagnostic.Substring(0, 4096) }
+                    throw "Worker exited before listener readiness: $Case. $diagnostic"
+                }
                 try {
                     $health = $client.GetAsync("$base/healthz").GetAwaiter().GetResult()
-                    $health.Dispose()
-                    $started = $true
+                    try {
+                        $started = [int]$health.StatusCode -eq 200 -and
+                            $health.Content.ReadAsStringAsync().GetAwaiter().GetResult() -ceq 'ok'
+                    }
+                    finally { $health.Dispose() }
                 } catch { $started = $false; Start-Sleep -Milliseconds 20 }
             } while (-not $started -and [DateTimeOffset]::UtcNow -lt $deadline)
             if (-not $started) { throw "Worker listener did not start: $Case" }
             $returned = $true
-            [pscustomobject]@{Process=$process; Port=$port; Stop=$stop; Client=$client; Base=$base; Trigger="$ready.advance"; Attempt="$ready.future-read"}
+            [pscustomobject]@{Process=$process; Port=$port; Stop=$stop; Client=$client; Base=$base; Trigger="$ready.advance"; Attempt="$ready.future-read"; Ready=$ready; ReadyWriteTicks=(Get-Item $ready).LastWriteTimeUtc.Ticks; OutputTask=$outputTask; ErrorTask=$errorTask}
         } finally {
             if (-not $returned) {
                 if ($client) { $client.Dispose() }
                 if ($process) {
                     try {
-                        if (-not $process.HasExited) { $process.Kill($true); $null = $process.WaitForExit(5000) }
+                        if (-not $process.HasExited) {
+                            try { $process.Kill($true) } catch { throw 'Worker fixture cleanup failed.' }
+                            if (-not $process.WaitForExit(5000)) { throw 'Worker fixture cleanup failed.' }
+                        }
+                        if ($outputTask) { $null = $outputTask.GetAwaiter().GetResult() }
+                        if ($errorTask) { $null = $errorTask.GetAwaiter().GetResult() }
                     } finally { $process.Dispose() }
                 }
             }
@@ -55,7 +79,13 @@ BeforeAll {
     function Stop-WorkerFixture($worker) {
         try {
             Set-Content -LiteralPath $worker.Stop -Value stop -Encoding ascii
-            if (-not $worker.Process.WaitForExit(8000)) { try { $worker.Process.Kill($true) }catch {}; throw 'Worker did not stop.' }
+            if (-not $worker.Process.WaitForExit(8000)) {
+                try { $worker.Process.Kill($true) } catch { throw 'Worker fixture cleanup failed.' }
+                if (-not $worker.Process.WaitForExit(5000)) { throw 'Worker fixture cleanup failed.' }
+                throw 'Worker did not stop within its deadline.'
+            }
+            $null = $worker.OutputTask.GetAwaiter().GetResult()
+            $null = $worker.ErrorTask.GetAwaiter().GetResult()
             $worker.Process.ExitCode | Should -Be 0
         }
         finally { $worker.Client.Dispose(); $worker.Process.Dispose() }
@@ -150,6 +180,8 @@ Describe 'Maester read-only loopback worker' {
             try { [Text.Encoding]::UTF8.GetString($get.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()) | Should -BeExactly '<html><body>old-snapshot</body></html>'; @($get.Headers.GetValues('X-Maester-Report-Run')).Count | Should -Be 1 }finally { $get.Dispose() }
             $head = Send-WorkerRequest $worker HEAD '/report.html'
             try { [int]$head.StatusCode | Should -Be 200; $head.Content.Headers.ContentLength | Should -BeGreaterThan 0; $head.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult().Length | Should -Be 0 }finally { $head.Dispose() }
+            Start-Sleep -Milliseconds 400
+            (Get-Item $worker.Ready).LastWriteTimeUtc.Ticks | Should -Be $worker.ReadyWriteTicks
         }
         finally { Stop-WorkerFixture $worker }
     }

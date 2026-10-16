@@ -130,11 +130,21 @@ elseif ($Case -eq 'expire') {
 
 $cts = [Threading.CancellationTokenSource]::new()
 $watch = [MaesterViewerFixtureStop]::Watch($StopPath, $cts)
-Set-Content -LiteralPath $ReadyPath -Value 'fixture-ready' -Encoding ascii
+$innerStore = $fixture.Store
+$readyFile = $ReadyPath
+$readyState = [pscustomobject]@{ Written = $false }
+$wrappedStore = {
+    param($Operation, $Key, [byte[]]$Bytes, $ContentType, $IfMatch, $IfNoneMatch, $MaximumBytes)
+    if (-not $readyState.Written) {
+        Set-Content -LiteralPath $readyFile -Value 'fixture-ready' -Encoding ascii
+        $readyState.Written = $true
+    }
+    & $innerStore $Operation $Key $Bytes $ContentType $IfMatch $IfNoneMatch $MaximumBytes
+}.GetNewClosure()
 try {
     $poll = if ($Case -eq 'slowClient') { [TimeSpan]::FromSeconds(30) } else { [TimeSpan]::FromMilliseconds(150) }
     $concurrent = if ($Case -eq 'slowClient') { 1 } else { 8 }
-    Start-MaesterViewerWorker -TenantId $tenant -Environment $environment -Store $fixture.Store -Port $Port `
+    Start-MaesterViewerWorker -TenantId $tenant -Environment $environment -Store $wrappedStore -Port $Port `
         -PollInterval $poll -MaximumReportAge ([TimeSpan]::FromMinutes(10)) `
         -ClientWriteTimeout ([TimeSpan]::FromSeconds(1)) -MaximumConcurrentRequests $concurrent -CancellationToken $cts.Token
 }
