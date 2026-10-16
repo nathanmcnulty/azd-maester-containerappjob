@@ -1,11 +1,14 @@
 # Approved drift input preparation
 
 `scripts/Maester.DriftInputs.psm1` implements the input boundary for MCAJ-010.
-It validates and stages data for the locked Maester drift suite. It does not yet
-enable that suite in the Container Apps Job runner, upload inputs, collect
-configuration, approve a baseline, publish reports or change permissions. The
-runner retains its default-disabled isolation. MCAT-011 coordinates the wider
-host rollout; this host task remains in progress.
+`scripts/Maester.DriftRun.psm1` and the runner provide a manual, default-off
+CLI opt-in for the locked Maester drift suite. The opt-in validates trusted
+operator arguments, binds both connected Graph and Azure tenants, stages the
+receipt, accounts for exact drift checks and private JUnit container errors,
+then removes the stage before existing private blob publication routes run.
+It does not provision or upload input packages, enable the scheduled/Bicep path,
+or change permissions. MCAT-011 coordinates the wider host rollout; this host
+task remains in progress.
 
 Use PowerShell 7.6+ and import the module from this checkout. The exported
 `Initialize-MaesterDriftInput` command requires:
@@ -119,17 +122,52 @@ digests and run ID. Only `<id>/baseline.json`, `current.json` and generated
 `settings.json` are staged. Windows staging disables inherited ACLs and grants
 only the current identity full control; Unix uses mode 0700. Source artifacts
 and the process drift environment variable are not changed. A failed preparation
-cleans only its freshly allocated child. Successful copies remain caller-owned;
-the future host lifecycle must delete that exact receipt-bound directory after
-invocation, while preserving input baselines and other runs.
+cleans only its freshly allocated child. The CLI adapter deletes that exact
+receipt-bound directory after invocation and before external publication. Its
+outer lifecycle deletes the owned private run root, including JSON, Markdown and
+JUnit reports, after success or failure. Input baselines and other runs remain.
 
-Next host integration must use only the locked built-in suite, require four
-positive-discovery checks per expected case, preserve ordinary assessment and
-genuine finding/report/publication failure semantics, restore ambient process
-state on every exit, and bind private output/access/retention/rollback/cleanup.
-No native job, workload identity, report access or live collection is qualified
-by this local helper or its fixtures. A second real host integration is required
-before extracting a shared adapter into `azd-reference`.
+The runner's `-EnableApprovedDrift` path verifies the locked built-in suite's
+SHA-256 and requires exactly four results per expected case from that file.
+Input-validity checks must pass; comparison checks can pass or report genuine
+findings. Missing, extra, duplicate, skipped or error results fail the gate.
+Supported Pester JUnit output must report zero discovery/container/setup errors;
+the XML reader prohibits DTDs and limits the document to 4 MiB. Ordinary
+assessments continue to run in the same invocation. Both genuine ordinary and
+drift findings remain in the report; missing reports and required latest-blob
+publication failures fail the runner. Ambient process state is restored exactly,
+including the distinction between an absent and an empty environment variable.
+The first opt-in refuses configured mail and Web App destinations because their
+audience and in-call delivery boundaries are not qualified for data-bearing
+reports. No native scheduled job, workload identity, report access, source
+transport/retention, rollback or live collection is qualified by this local
+adapter or its fixtures. A second real host integration is required before
+extracting a shared adapter into `azd-reference`.
+
+## Manual CLI opt-in
+
+The runner accepts these explicit arguments in addition to `-EnableApprovedDrift`:
+
+| Runner argument | Input helper argument |
+| --- | --- |
+| `-DriftInputRoot` | `InputRoot` |
+| `-DriftExpectedBaselineManifestSha256` | `ExpectedBaselineManifestSha256` |
+| `-DriftExpectedTenantId` | `TenantId`; also checked against connected Graph and Az tenant contexts |
+| `-DriftEnvironment` | `Environment` |
+| `-DriftRunId` | `RunId` |
+| `-DriftProducerId` | `ProducerId` |
+| `-DriftProducerRevision` | `ProducerRevision` |
+| `-DriftMaxAgeMinutes` | `MaxAgeMinutes`, optional, default 30 |
+
+Partial arguments without the switch are refused. Bicep, schedules and environment
+variables do not enable this feature. Setup uploads the two helper modules beside
+the runner; it does not upload or acquire input packages. Operators must provide
+a protected source package and independent approval context, review all permitted
+values for privacy, and approve the configured private Blob readers and retention
+before any native pilot. Existing archive retention is 365 days; latest output
+has no new retention policy. This source integration does not verify live Blob
+access or retention. Rolling back means removing the explicit switch and binding
+arguments; native rollback still needs qualification.
 
 If partial-stage deletion fails, preparation throws `drift.stagingCleanupFailed`.
 The private generated path is retained in `Exception.Data['StageRoot']` for the
