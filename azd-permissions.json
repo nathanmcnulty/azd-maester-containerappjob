@@ -3,7 +3,7 @@
   "solutionId": "azd-maester-containerappjob",
   "status": "implemented",
   "coverage": "partial",
-  "reviewedOn": "2026-10-07",
+  "reviewedOn": "2026-10-16",
   "requirements": [
     {
       "resource": "https://graph.microsoft.com",
@@ -450,6 +450,7 @@
     "Optional Teams setup is not inventoried: Teams Reader Entra directory role, RoleManagement.ReadWrite.Directory used by the shared advanced-setup connection, and its cleanup authority.",
     "Optional Azure setup is not inventoried: workload Reader at operator-selected subscription/resource-group/management-group scopes and the operator authority used to create those assignments.",
     "Optional report web app setup is not inventoried: Website Contributor for the workload, Group.Read.All/Directory.Read.All when resolving a group name, Application.ReadWrite.All/Directory.Read.All/DelegatedPermissionGrant.ReadWrite.All for Easy Auth, and the tenant-wide openid/profile/email/User.Read delegated grant.",
-    "Default-disabled drift isolation adds no permission or data collector. Approved drift inputs and any future collection, baseline approval, publication and target-specific authority require a separate review; existing runtime grants are unchanged."
+    "Default-disabled drift isolation adds no permission or data collector. Approved drift inputs and any future collection, baseline approval, publication and target-specific authority require a separate review; existing runtime grants are unchanged.",
+    "The manual default-off approved-drift CLI adapter adds no collector, credential, scope or role. It uses existing managed identities and private Blob publication; mail and Web App destinations are refused for enabled runs. Native input provisioning, source cleanup, private Blob readers and retention, execution, rollback and report-access proof remain gaps. Approval labels and metadata grant no authority."
   ]
 }

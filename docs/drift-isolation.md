@@ -1,8 +1,10 @@
 # Configuration-drift isolation
 
-This host does not yet accept approved drift baseline/current artifacts.
-Setting `MAESTER_FOLDER_DRIFT` or placing a folder beside the runner cannot enable
-drift. The runner excludes the locked upstream drift file before Pester discovery,
+Approved drift remains default-disabled. The runner accepts it only through the
+explicit `-EnableApprovedDrift` CLI assertion and its complete trusted argument
+set; setting `MAESTER_FOLDER_DRIFT` or placing a folder beside the runner cannot
+enable it. The enabled path uses the locked suite, private staged copies, exact
+result/JUnit accounting and owned cleanup. The disabled path excludes the suite,
 clears that environment variable during `Invoke-Maester`, and restores the prior
 process value in `finally`. Ordinary assessment and publication behavior remains
 host-owned, including genuine security findings and failure propagation.
@@ -72,4 +74,10 @@ There is no new permission or collector. Enabling drift still needs approved
 bounded data-only artifacts, tenant/run/source/freshness/hash validation, reviewed
 normalization/exclusions, immutable baseline approval and output privacy checks.
 Native job execution, publication/access, rollback and owned cleanup remain
-separate gates. Other canonical hosts still need their own isolation fixes.
+separate gates. Canonical host rollout is tracked centrally by MCAT-011.
+
+The [approved input helper](drift-input-contract.md) implements local baseline
+approval-digest, target/run/source/freshness/schema/byte validation and private
+staging. The manual runner adapter is implemented, while MCAJ-010 remains in
+progress for native/source transport, audience/access, retention, rollback and
+second-host gates.

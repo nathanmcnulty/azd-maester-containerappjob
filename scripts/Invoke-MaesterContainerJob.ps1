@@ -1,6 +1,20 @@
-﻿# Invoke-MaesterContainerJob.ps1
+#Requires -Version 7.6
+# Invoke-MaesterContainerJob.ps1
 # Runner script for the Container App Job. Mounted via Azure Files volume.
 # Reads configuration from environment variables set on the Container App Job.
+
+[CmdletBinding()]
+param(
+  [switch]$EnableApprovedDrift,
+  [string]$DriftInputRoot,
+  [string]$DriftExpectedBaselineManifestSha256,
+  [string]$DriftExpectedTenantId,
+  [string]$DriftEnvironment,
+  [string]$DriftRunId,
+  [string]$DriftProducerId,
+  [string]$DriftProducerRevision,
+  [ValidateRange(1, 60)][int]$DriftMaxAgeMinutes = 30
+)
 
 # Use 'Continue' globally so that test framework errors (Pester/Maester) do not
 # abort the script. Critical sections use explicit -ErrorAction Stop instead.
@@ -24,6 +38,49 @@ function ConvertTo-BoolOrDefault {
     'false' { return $false }
     default { return $Default }
   }
+}
+
+function Assert-ApprovedDriftCliOptions {
+  param(
+    [Parameter(Mandatory)][bool]$Enabled,
+    [Parameter(Mandatory)][System.Collections.IDictionary]$BoundParameters,
+    [string]$InputRoot,
+    [string]$ExpectedBaselineManifestSha256,
+    [string]$ExpectedTenantId,
+    [string]$Environment,
+    [string]$RunId,
+    [string]$ProducerId,
+    [string]$ProducerRevision,
+    [string]$StorageAccountName,
+    [string]$MailRecipient,
+    [string]$WebAppName
+  )
+  $driftParameterNames = @(
+    'DriftInputRoot', 'DriftExpectedBaselineManifestSha256', 'DriftExpectedTenantId',
+    'DriftEnvironment', 'DriftRunId', 'DriftProducerId', 'DriftProducerRevision',
+    'DriftMaxAgeMinutes'
+  )
+  if (-not $Enabled) {
+    foreach ($name in $driftParameterNames) {
+      if ($BoundParameters.ContainsKey($name)) { throw 'drift.optionsRequireEnablement' }
+    }
+    return
+  }
+  foreach ($value in @($InputRoot, $ExpectedBaselineManifestSha256, $ExpectedTenantId, $Environment, $RunId, $ProducerId, $ProducerRevision)) {
+    if ([string]::IsNullOrWhiteSpace($value)) { throw 'drift.optionsIncomplete' }
+  }
+  if ($ExpectedBaselineManifestSha256 -cnotmatch '^[0-9a-f]{64}\z' -or $ProducerRevision -cnotmatch '^[0-9a-f]{40}\z') {
+    throw 'drift.optionsInvalid'
+  }
+  if (-not [string]::IsNullOrWhiteSpace($MailRecipient) -or -not [string]::IsNullOrWhiteSpace($WebAppName)) {
+    throw 'drift.publishingAudienceUnsupported'
+  }
+  if ([string]::IsNullOrWhiteSpace($StorageAccountName)) { throw 'drift.storageDestinationRequired' }
+}
+
+function Remove-ApprovedDriftRunRoot {
+  if (-not $EnableApprovedDrift -or $null -eq $approvedDriftRun) { return }
+  Remove-DriftOwnedDirectory -Path $approvedDriftRun.Root -Parent $approvedDriftRun.Parent -LeafPattern ('^' + [regex]::Escape($approvedDriftRun.Leaf) + '\z')
 }
 
 function Get-PlainToken {
@@ -132,6 +189,20 @@ $WebAppName = $env:WEB_APP_NAME
 $WebAppResourceGroupName = $env:WEB_APP_RESOURCE_GROUP_NAME
 $ExportContainer = 'archive'
 $DashboardContainer = 'latest'
+
+Assert-ApprovedDriftCliOptions `
+  -Enabled $EnableApprovedDrift `
+  -BoundParameters $PSBoundParameters `
+  -InputRoot $DriftInputRoot `
+  -ExpectedBaselineManifestSha256 $DriftExpectedBaselineManifestSha256 `
+  -ExpectedTenantId $DriftExpectedTenantId `
+  -Environment $DriftEnvironment `
+  -RunId $DriftRunId `
+  -ProducerId $DriftProducerId `
+  -ProducerRevision $DriftProducerRevision `
+  -StorageAccountName $StorageAccountName `
+  -MailRecipient $MailRecipient `
+  -WebAppName $WebAppName
 
 if ($includeExchange) {
   $requiredModules += 'ExchangeOnlineManagement'
@@ -305,8 +376,14 @@ if ($includeAzure) {
 # ──────────────────────────────────────────────
 
 $tempBase = if ($env:TEMP) { $env:TEMP } elseif ($env:TMPDIR) { $env:TMPDIR } else { '/tmp' }
-$tempRoot = Join-Path -Path $tempBase -ChildPath ("maester-{0}-{1}" -f (Get-Date -Format 'yyyyMMddHHmmss'), [guid]::NewGuid().ToString('N'))
-New-Item -Path $tempRoot -ItemType Directory -Force | Out-Null
+$tempRoot = $null
+$approvedDriftRun = $null
+$approvedDriftPrimaryFailure = $null
+$approvedDriftReceipt = $null
+if (-not $EnableApprovedDrift) {
+  $tempRoot = Join-Path -Path $tempBase -ChildPath ("maester-{0}-{1}" -f (Get-Date -Format 'yyyyMMddHHmmss'), [guid]::NewGuid().ToString('N'))
+  New-Item -Path $tempRoot -ItemType Directory -Force | Out-Null
+}
 
 $maesterModule = Get-Module -Name Maester -ListAvailable |
   Where-Object { $_.Version -eq [version]'2.2.0' } |
@@ -340,10 +417,38 @@ if (-not $testsPath) {
 
 Write-Output "Using Maester test path: $testsPath"
 
+$approvedDriftRun = $null
+try {
+if ($EnableApprovedDrift) {
+  Import-Module (Join-Path $PSScriptRoot 'Maester.DriftInputs.psm1') -Force -ErrorAction Stop
+  Import-Module (Join-Path $PSScriptRoot 'Maester.DriftRun.psm1') -Force -ErrorAction Stop
+  Assert-MaesterDriftTenantContext -ExpectedTenantId $DriftExpectedTenantId
+  $approvedDriftRun = New-MaesterDriftRunRoot
+  $tempRoot = $approvedDriftRun.OutputParent
+  try {
+    $approvedDriftReceipt = Initialize-MaesterDriftInput `
+      -InputRoot $DriftInputRoot `
+      -StagingParent $approvedDriftRun.StagingParent `
+      -ExpectedBaselineManifestSha256 $DriftExpectedBaselineManifestSha256 `
+      -TenantId $DriftExpectedTenantId `
+      -Environment $DriftEnvironment `
+      -RunId $DriftRunId `
+      -ProducerId $DriftProducerId `
+      -ProducerRevision $DriftProducerRevision `
+      -MaxAgeMinutes $DriftMaxAgeMinutes
+  }
+  catch {
+    $preparationException = $_.Exception
+    $failure = [InvalidOperationException]::new('drift.inputPreparationFailed')
+    $failure.Data['PreparationException'] = $preparationException
+    throw $failure
+  }
+}
+
 $pesterConfig = [PesterConfiguration]@{
   Run = @{
-    # Drift is not an enabled host feature. Exclude it before BeforeDiscovery can
-    # read ambient input or encounter an unqualified empty/scalar configuration.
+    # Exclude ambient drift before discovery. The explicit approved adapter
+    # removes only this exclusion after validating and privately staging inputs.
     ExcludePath = @((Join-Path $testsPath 'Maester/Drift/MT1060Drift.tests.ps1'))
   }
   TestRegistry = @{
@@ -358,7 +463,7 @@ $maesterInvokeParameters = @{
   PesterConfiguration = $pesterConfig
 }
 
-if (-not [string]::IsNullOrWhiteSpace($MailRecipient)) {
+if (-not $EnableApprovedDrift -and -not [string]::IsNullOrWhiteSpace($MailRecipient)) {
   $maesterInvokeParameters['MailRecipient'] = $MailRecipient
   $maesterInvokeParameters['MailUserId'] = $MailRecipient
   Write-Output "Email notifications enabled for recipient: $MailRecipient"
@@ -367,14 +472,33 @@ if (-not [string]::IsNullOrWhiteSpace($MailRecipient)) {
 Write-Output "Running Invoke-Maester from test path '$testsPath'"
 $previousDriftRoot = [Environment]::GetEnvironmentVariable('MAESTER_FOLDER_DRIFT', 'Process')
 try {
-  [Environment]::SetEnvironmentVariable('MAESTER_FOLDER_DRIFT', $null, 'Process')
-  Invoke-Maester @maesterInvokeParameters
+  if ($EnableApprovedDrift) {
+    [Environment]::SetEnvironmentVariable('MAESTER_FOLDER_DRIFT', $approvedDriftReceipt.StageRoot, 'Process')
+    $approvedDriftRunResult = Invoke-MaesterApprovedDrift `
+      -Receipt $approvedDriftReceipt `
+      -RunRoot $approvedDriftRun.Root `
+      -OutputParent $approvedDriftRun.OutputParent `
+      -TestsPath $testsPath `
+      -SuitePath (Join-Path $testsPath 'Maester/Drift/MT1060Drift.tests.ps1') `
+      -MaesterInvokeParameters $maesterInvokeParameters
+  }
+  else {
+    [Environment]::SetEnvironmentVariable('MAESTER_FOLDER_DRIFT', [System.Management.Automation.Language.NullString]::Value, 'Process')
+    Invoke-Maester @maesterInvokeParameters
+  }
 }
 catch {
-  throw "Invoke-Maester failed: $($_.Exception.Message)"
+  $invocationException = $_.Exception
+  if ($EnableApprovedDrift) {
+    $failure = [InvalidOperationException]::new('drift.runFailed')
+    $failure.Data['InvocationException'] = $invocationException
+    throw $failure
+  }
+  throw "Invoke-Maester failed: $($invocationException.Message)"
 }
 finally {
-  [Environment]::SetEnvironmentVariable('MAESTER_FOLDER_DRIFT', $previousDriftRoot, 'Process')
+  $restoreDriftRoot = if ($null -eq $previousDriftRoot) { [System.Management.Automation.Language.NullString]::Value } else { $previousDriftRoot }
+  [Environment]::SetEnvironmentVariable('MAESTER_FOLDER_DRIFT', $restoreDriftRoot, 'Process')
 }
 Write-Output 'Invoke-Maester execution completed.'
 
@@ -382,13 +506,20 @@ Write-Output 'Invoke-Maester execution completed.'
 # Locate generated report
 # ──────────────────────────────────────────────
 
-$generatedHtml = Get-ChildItem -Path $tempRoot -Recurse -Filter '*.html' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-if ($generatedHtml -and $generatedHtml.Length -gt 0) {
-  $outputHtmlPath = $generatedHtml.FullName
+if ($EnableApprovedDrift) {
+  $outputHtmlPath = $approvedDriftRunResult.OutputHtmlPath
+  if (-not (Test-Path -LiteralPath $outputHtmlPath -PathType Leaf)) { throw 'Invoke-Maester did not generate a nonempty HTML report.' }
   Write-Output "Using generated HTML report: $outputHtmlPath"
 }
 else {
-  throw 'Invoke-Maester did not generate a nonempty HTML report.'
+  $generatedHtml = Get-ChildItem -Path $tempRoot -Recurse -Filter '*.html' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+  if ($generatedHtml -and $generatedHtml.Length -gt 0) {
+    $outputHtmlPath = $generatedHtml.FullName
+    Write-Output "Using generated HTML report: $outputHtmlPath"
+  }
+  else {
+    throw 'Invoke-Maester did not generate a nonempty HTML report.'
+  }
 }
 
 Write-Output "Maester run completed. Report generated successfully."
@@ -430,6 +561,24 @@ if (-not [string]::IsNullOrWhiteSpace($WebAppName) -and -not [string]::IsNullOrW
 }
 elseif (-not [string]::IsNullOrWhiteSpace($WebAppName)) {
   Write-Warning "WEB_APP_NAME is set to '$WebAppName' but WEB_APP_RESOURCE_GROUP_NAME is missing. Skipping Web App content publish."
+}
+
+}
+catch {
+  $approvedDriftPrimaryFailure = $_.Exception
+  throw
+}
+finally {
+  if ($EnableApprovedDrift -and $null -ne $approvedDriftRun) {
+    try { Remove-ApprovedDriftRunRoot }
+    catch {
+      $failure = [InvalidOperationException]::new('drift.runCleanupFailed')
+      $failure.Data['RunRoot'] = $approvedDriftRun.Root
+      $failure.Data['CleanupException'] = $_.Exception
+      if ($null -ne $approvedDriftPrimaryFailure) { $failure.Data['PrimaryException'] = $approvedDriftPrimaryFailure }
+      throw $failure
+    }
+  }
 }
 
 Write-Output "Container job finished at $(Get-Date -Format 'u')"
