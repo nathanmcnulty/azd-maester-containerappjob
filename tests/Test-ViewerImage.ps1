@@ -56,7 +56,12 @@ http://127.0.0.1:40342 {
     $status=($query.Output.Trim()-split"`n")[-1];if($status-ne'200'){Start-Sleep -Milliseconds 200}
   }while($status-ne'200'-and[DateTimeOffset]::UtcNow-lt$deadline)
   Assert-Equal $status '200' healthStatus
-  $report=(Invoke-Docker @('exec',$worker,'/opt/microsoft/powershell/7/pwsh','-NoLogo','-NoProfile','-Command','$c=[Net.Http.HttpClient]::new();try{$c.Timeout=[TimeSpan]::FromSeconds(2);$r=$c.GetAsync("http://127.0.0.1:8080/report.html").GetAwaiter().GetResult();[int]$r.StatusCode}finally{$c.Dispose()}')).Output.Trim();Assert-Equal ($report-split"`n")[-1] '503' reportStatus
+  $report=(Invoke-Docker @('exec',$worker,'/opt/microsoft/powershell/7/pwsh','-NoLogo','-NoProfile','-Command','$c=[Net.Http.HttpClient]::new();try{$c.Timeout=[TimeSpan]::FromSeconds(2);$r=$c.GetAsync("http://127.0.0.1:8080/report.html").GetAwaiter().GetResult();try{[pscustomobject]@{status=[int]$r.StatusCode;csp=@($r.Headers.GetValues("Content-Security-Policy"));frame=@($r.Headers.GetValues("X-Frame-Options"));referrer=@($r.Headers.GetValues("Referrer-Policy"))}|ConvertTo-Json -Compress}finally{$r.Dispose()}}finally{$c.Dispose()}')).Output.Trim()|ConvertFrom-Json
+  Assert-Equal $report.status 503 reportStatus
+  Assert-Equal @($report.csp).Count 1 responseCspCount;Assert-Equal $report.csp[0] "frame-ancestors 'none'; sandbox allow-scripts allow-same-origin allow-modals allow-downloads" responseCsp
+  Assert-Equal @($report.frame).Count 1 responseFrameCount;Assert-Equal $report.frame[0] 'DENY' responseFrame
+  Assert-Equal @($report.referrer).Count 1 responseReferrerCount;Assert-Equal $report.referrer[0] 'no-referrer' responseReferrer
+  Add-Record responsePolicy $report
   Assert-Equal (Invoke-Docker @('exec',$worker,'/usr/bin/id','-u')).Output.Trim() '65532' workerEffectiveUser
   Assert-Equal (Invoke-Docker @('exec',$proxy,'/usr/bin/id','-u')).Output.Trim() '65532' caddyEffectiveUser
   Assert-Equal (Invoke-Docker @('exec',$worker,'/usr/bin/cat','/proc/1/comm')).Output.Trim() 'pwsh' workerPid1

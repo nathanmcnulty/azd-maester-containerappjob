@@ -30,7 +30,8 @@ BeforeAll {
             $process = [Diagnostics.Process]::Start($info)
             $outputTask = $process.StandardOutput.ReadToEndAsync()
             $errorTask = $process.StandardError.ReadToEndAsync()
-            $deadline = [DateTimeOffset]::UtcNow.AddSeconds($(if($Case-eq'slowClient'){30}else{15}))
+            # A cold child compiles the server and qualifies several MiB before listener readiness.
+            $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
             while (-not (Test-Path $ready) -and [DateTimeOffset]::UtcNow -lt $deadline) {
                 if ($process.HasExited) {
                     $diagnostic = ($outputTask.GetAwaiter().GetResult() + $errorTask.GetAwaiter().GetResult())
@@ -101,6 +102,20 @@ BeforeAll {
         $request = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::new($Method), $worker.Base + $Path)
         if ($Body) { $request.Content = [Net.Http.ByteArrayContent]::new($Body) }
         try { return $worker.Client.SendAsync($request).GetAwaiter().GetResult() }finally { $request.Dispose() }
+    }
+    function Assert-WorkerResponsePolicy($response) {
+        $expected = @{
+            'Content-Security-Policy' = "frame-ancestors 'none'; sandbox allow-scripts allow-same-origin allow-modals allow-downloads"
+            'X-Frame-Options' = 'DENY'
+            'Referrer-Policy' = 'no-referrer'
+            'Cache-Control' = 'no-store'
+            'X-Content-Type-Options' = 'nosniff'
+        }
+        foreach ($name in $expected.Keys) {
+            $values = @($response.Headers.GetValues($name))
+            $values.Count | Should -Be 1
+            $values[0] | Should -BeExactly $expected[$name]
+        }
     }
     function Send-RawWorkerRequest($worker, [string]$RequestTarget) {
         $tcp = [Net.Sockets.TcpClient]::new()
@@ -184,9 +199,9 @@ Describe 'Maester read-only loopback worker' {
         $worker = Start-WorkerFixture valid
         try {
             $get = Wait-ReportStatus $worker 200 'false'
-            try { [Text.Encoding]::UTF8.GetString($get.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()) | Should -BeExactly $script:oldReportText; @($get.Headers.GetValues('X-Maester-Report-Run')).Count | Should -Be 1 }finally { $get.Dispose() }
+            try { Assert-WorkerResponsePolicy $get; [Text.Encoding]::UTF8.GetString($get.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()) | Should -BeExactly $script:oldReportText; @($get.Headers.GetValues('X-Maester-Report-Run')).Count | Should -Be 1 }finally { $get.Dispose() }
             $head = Send-WorkerRequest $worker HEAD '/report.html'
-            try { [int]$head.StatusCode | Should -Be 200; $head.Content.Headers.ContentLength | Should -BeGreaterThan 0; $head.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult().Length | Should -Be 0 }finally { $head.Dispose() }
+            try { Assert-WorkerResponsePolicy $head; [int]$head.StatusCode | Should -Be 200; $head.Content.Headers.ContentLength | Should -BeGreaterThan 0; $head.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult().Length | Should -Be 0 }finally { $head.Dispose() }
             Start-Sleep -Milliseconds 400
             (Get-Item $worker.Ready).LastWriteTimeUtc.Ticks | Should -Be $worker.ReadyWriteTicks
         }
@@ -200,7 +215,7 @@ Describe 'Maester read-only loopback worker' {
                     @{m = 'GET'; p = '/report.html?x=1'; b = $null; s = 404 },
                     @{m = 'GET'; p = '/runs/id/report.html'; b = $null; s = 404 }, @{m = 'POST'; p = '/report.html'; b = $null; s = 405 },
                     @{m = 'GET'; p = '/report.html'; b = [byte[]](1); s = 400 })) {
-                $response = Send-WorkerRequest $worker $case.m $case.p $case.b; try { [int]$response.StatusCode | Should -Be $case.s }finally { $response.Dispose() }
+                $response = Send-WorkerRequest $worker $case.m $case.p $case.b; try { Assert-WorkerResponsePolicy $response; [int]$response.StatusCode | Should -Be $case.s }finally { $response.Dispose() }
             }
             (Send-RawWorkerRequest $worker '/%72eport.html') | Should -Match '^HTTP/1\.1 404 '
         }
@@ -210,7 +225,7 @@ Describe 'Maester read-only loopback worker' {
     It 'keeps probes minimal and startup unavailable without a snapshot' {
         $worker = Start-WorkerFixture missing
         try {
-            foreach ($path in '/healthz', '/readyz', '/report.html') { $response = Send-WorkerRequest $worker GET $path; try { if ($path -eq '/healthz') { [int]$response.StatusCode | Should -Be 200 }else { [int]$response.StatusCode | Should -Be 503 }; $text = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult(); $text | Should -Not -Match '11111111|worker-test|Projection|exception|snapshot'; $response.Headers.Contains('X-Maester-Report-Run') | Should -BeFalse }finally { $response.Dispose() } }
+            foreach ($path in '/healthz', '/readyz', '/report.html') { $response = Send-WorkerRequest $worker GET $path; try { Assert-WorkerResponsePolicy $response; if ($path -eq '/healthz') { [int]$response.StatusCode | Should -Be 200 }else { [int]$response.StatusCode | Should -Be 503 }; $text = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult(); $text | Should -Not -Match '11111111|worker-test|Projection|exception|snapshot'; $response.Headers.Contains('X-Maester-Report-Run') | Should -BeFalse }finally { $response.Dispose() } }
         }
         finally { Stop-WorkerFixture $worker }
     }

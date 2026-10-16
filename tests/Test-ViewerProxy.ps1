@@ -17,6 +17,19 @@ $stop = Join-Path $OutputDirectory 'worker.stop'
 $ready = Join-Path $OutputDirectory 'worker.ready'
 if ((Test-Path $stop) -or (Test-Path $ready)) { throw 'Use a new proxy validation output directory.' }
 function Assert-Proxy([bool]$Value, [string]$Name) { if (-not$Value) { throw "Proxy validation failed: $Name" }; $checks.Add($Name) }
+function Assert-ProxyResponsePolicy($Response, [string]$Route) {
+    $expected = @{
+        'Content-Security-Policy' = "frame-ancestors 'none'; sandbox allow-scripts allow-same-origin allow-modals allow-downloads"
+        'X-Frame-Options' = 'DENY'
+        'Referrer-Policy' = 'no-referrer'
+        'Cache-Control' = 'no-store'
+        'X-Content-Type-Options' = 'nosniff'
+    }
+    foreach ($name in $expected.Keys) {
+        $values = @($Response.Headers.GetValues($name))
+        Assert-Proxy ($values.Count -eq 1 -and $values[0] -ceq $expected[$name]) "Exact worker policy through Caddy: $Route $name"
+    }
+}
 function Start-ProxyProcess([string]$File, [string[]]$Arguments, [string]$Name) {
     $info = [Diagnostics.ProcessStartInfo]::new($File); $info.UseShellExecute = $false; $info.CreateNoWindow = $true
     foreach ($argument in $Arguments) { $info.ArgumentList.Add($argument) }
@@ -52,8 +65,10 @@ try {
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds(10)
     do { try { $text = $http.GetStringAsync('http://127.0.0.1:8080/report.html').GetAwaiter().GetResult(); $proxyReady = $true }catch { $proxyReady = $false; Start-Sleep -Milliseconds 50 }; if ($caddy.HasExited) { throw 'Caddy exited before proxy validation.' } }while (-not$proxyReady -and [DateTimeOffset]::UtcNow -lt $deadline)
     Assert-Proxy ($proxyReady -and $text -ceq $expectedReport) 'Real Caddy forwards exact verified report bytes from the worker'
+    $report = $http.GetAsync('http://127.0.0.1:8080/report.html').GetAwaiter().GetResult()
+    try { Assert-ProxyResponsePolicy $report 'GET /report.html' } finally { $report.Dispose() }
     $head = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Head, 'http://127.0.0.1:8080/report.html')
-    try { $response = $http.SendAsync($head).GetAwaiter().GetResult(); try { Assert-Proxy ([int]$response.StatusCode -eq 200 -and $response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult().Length -eq 0 -and $response.Content.Headers.ContentLength -gt 0) 'HEAD retains length and has no response body' }finally { $response.Dispose() } }finally { $head.Dispose() }
+    try { $response = $http.SendAsync($head).GetAwaiter().GetResult(); try { Assert-ProxyResponsePolicy $response 'HEAD /report.html'; Assert-Proxy ([int]$response.StatusCode -eq 200 -and $response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult().Length -eq 0 -and $response.Content.Headers.ContentLength -gt 0) 'HEAD retains length and has no response body' }finally { $response.Dispose() } }finally { $head.Dispose() }
     foreach ($target in '/report.html?destination=https://example.invalid', '/%72eport.html', '/runs/secret/report.html', '/latest.json', '/Caddyfile', '/', '/config/') {
         $raw = Send-RawProxy GET $target
         Assert-Proxy ($raw -match '\AHTTP/1\.[01] 404 ' -and $raw -notmatch 'old-snapshot') "Raw route denied: $target"
@@ -66,7 +81,7 @@ try {
     Assert-Proxy ($forged -match '\AHTTP/1\.[01] 200 ' -and $forged.Contains('old-snapshot') -and $forged -notmatch 'synthetic-only|example.invalid') 'Request host and headers do not change the fixed upstream or enter the response'
     foreach ($path in '/healthz', '/readyz') {
         $probe = $http.GetAsync("http://127.0.0.1:8080$path").GetAwaiter().GetResult()
-        try { $content = $probe.Content.ReadAsStringAsync().GetAwaiter().GetResult(); Assert-Proxy ([int]$probe.StatusCode -eq 200 -and $content -notmatch 'old-snapshot|11111111|worker-test|Projection') "Minimal probe through Caddy: $path" }finally { $probe.Dispose() }
+        try { Assert-ProxyResponsePolicy $probe "GET $path"; $content = $probe.Content.ReadAsStringAsync().GetAwaiter().GetResult(); Assert-Proxy ([int]$probe.StatusCode -eq 200 -and $content -notmatch 'old-snapshot|11111111|worker-test|Projection') "Minimal probe through Caddy: $path" }finally { $probe.Dispose() }
     }
     $admin = [Net.Sockets.TcpClient]::new(); try { $listening = $false; try { $admin.Connect('127.0.0.1', 2019); $listening = $true }catch {}; Assert-Proxy (-not$listening) 'Caddy admin listener is disabled' }finally { $admin.Dispose() }
     $result.success = $true

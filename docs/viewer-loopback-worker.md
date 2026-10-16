@@ -20,6 +20,19 @@ staleness metadata: run ID, generation, age in seconds, and whether the latest
 refresh failed. These headers are intended for the trusted same-app proxy and
 must not be treated as authorization or issuer proof.
 
+Handled worker responses also carry one fixed HTTP `Content-Security-Policy`:
+`frame-ancestors 'none'; sandbox allow-scripts allow-same-origin allow-modals allow-downloads`, plus `X-Frame-Options: DENY`,
+`Referrer-Policy: no-referrer`, `Cache-Control: no-store`, and
+`X-Content-Type-Options: nosniff`. The HTTP policy complements the qualified
+report's script-hash meta policy: it denies embedding, permits the reviewed
+scripts and their same-origin theme storage, and permits the report's print
+action and trusted client-generated configuration download. Forms and popups
+remain ungranted. An opaque-origin sandbox
+breaks the locked bundle's local-storage access and cannot be used unchanged.
+The HTTP policy does not authenticate the initial document request or replace
+Entra access control. Automated browser checks do not prove a user-visible print
+dialog or physical printing.
+
 ## Bounds and failure behavior
 
 - Poll interval: 100 milliseconds to 1 hour; default 30 seconds.
@@ -77,6 +90,12 @@ connections per upstream, and transport/server timeouts are bounded. Admin,
 configuration persistence, automatic TLS management, and logging are disabled.
 TLS and authorization remain platform requirements; request headers are not
 identity proof inside the worker.
+
+Caddy forwards the worker's response policy unchanged. The proxy tests require
+exactly one value for each policy header on report GET/HEAD and probes; the image
+smoke also checks the unavailable-report response. No report HTML is served by
+Caddy's local route-denial or gateway-error responses, and no policy claim is
+made for those responses or for connections aborted before a handled response.
 
 CI selects hash-pinned Caddy 2.11.7 and exercises both the real proxy-to-worker
 path and a bounded synthetic upstream capture. The capture proves the actual

@@ -79,6 +79,9 @@ public sealed class MaesterViewerLoopbackServer : IDisposable {
             var response = context.Response;
             response.Headers["Cache-Control"] = "no-store";
             response.Headers["X-Content-Type-Options"] = "nosniff";
+            response.Headers["Content-Security-Policy"] = "frame-ancestors 'none'; sandbox allow-scripts allow-same-origin allow-modals allow-downloads";
+            response.Headers["X-Frame-Options"] = "DENY";
+            response.Headers["Referrer-Policy"] = "no-referrer";
             string raw = request.RawUrl ?? "";
             if (request.ContentLength64 > 0 || request.IsWebSocketRequest || request.Headers["Transfer-Encoding"] != null) {
                 await WriteMinimalAsync(response, 400, "bad request", false).ConfigureAwait(false); return;
