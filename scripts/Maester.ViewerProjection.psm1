@@ -1,5 +1,6 @@
 #Requires -Version 7.6
 Set-StrictMode -Version Latest
+Import-Module (Join-Path $PSScriptRoot 'Maester.ViewerContent.psm1') -Force
 
 $script:PointerKey = 'latest.json'
 $script:ManifestMaximumBytes = 8192
@@ -95,6 +96,7 @@ function Publish-MaesterViewerProjection {
   [CmdletBinding()]
   param(
     [Parameter(Mandatory)][byte[]]$HtmlBytes,
+    [Parameter(Mandatory)][byte[]]$TemplateBytes,
     [Parameter(Mandatory)][string]$TenantId,
     [Parameter(Mandatory)][string]$Environment,
     [Parameter(Mandatory)][string]$RunId,
@@ -103,6 +105,7 @@ function Publish-MaesterViewerProjection {
     [ValidateRange(1, 67108864)][int64]$MaximumHtmlBytes = $script:DefaultHtmlMaximumBytes
   )
   Assert-MaesterProjectionIdentity $TenantId $Environment $RunId
+  $null=Assert-MaesterViewerReportProjection -HtmlBytes $HtmlBytes -TemplateBytes $TemplateBytes
   if ($MaximumHtmlBytes -gt $script:AbsoluteHtmlMaximumBytes -or $HtmlBytes.Length -eq 0 -or $HtmlBytes.Length -gt $MaximumHtmlBytes) {
     throw 'Projection HTML is invalid.'
   }
@@ -164,10 +167,12 @@ function Read-MaesterViewerProjection {
   param(
     [Parameter(Mandatory)][string]$TenantId,
     [Parameter(Mandatory)][string]$Environment,
+    [Parameter(Mandatory)][byte[]]$TemplateBytes,
     [Parameter(Mandatory)][scriptblock]$Store,
     [ValidateRange(1, 67108864)][int64]$MaximumHtmlBytes = $script:DefaultHtmlMaximumBytes
   )
   Assert-MaesterProjectionIdentity $TenantId $Environment $null -TenantEnvironmentOnly
+  Assert-MaesterViewerContentTemplate -TemplateBytes $TemplateBytes
   if ($MaximumHtmlBytes -gt $script:AbsoluteHtmlMaximumBytes) { throw 'Projection size limit is invalid.' }
   for ($attempt = 1; $attempt -le 3; $attempt++) {
     $pointerRead = Invoke-MaesterStoreGet $Store $script:PointerKey $script:PointerMaximumBytes
@@ -187,6 +192,8 @@ function Read-MaesterViewerProjection {
     $htmlRead = Invoke-MaesterStoreGet $Store $manifest.html.key $MaximumHtmlBytes
     if ($htmlRead.status -ne 'found' -or $htmlRead.bytes.Length -ne [long]$manifest.html.length -or
         (Get-MaesterProjectionHash $htmlRead.bytes) -cne $manifest.html.sha256) { throw 'Projection snapshot HTML is invalid.' }
+    try { $null=Assert-MaesterViewerReportProjection -HtmlBytes $htmlRead.bytes -TemplateBytes $TemplateBytes }
+    catch { throw 'Projection snapshot HTML is invalid.' }
 
     $confirm = Invoke-MaesterStoreGet $Store $script:PointerKey $script:PointerMaximumBytes
     if ($confirm.status -eq 'found' -and $confirm.etag -ceq $pointerRead.etag -and

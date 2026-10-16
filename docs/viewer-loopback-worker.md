@@ -2,7 +2,7 @@
 
 `Start-MaesterViewerWorker` is the read-only source boundary for a future
 same-app viewer. It repeatedly calls `Read-MaesterViewerProjection` with a
-caller-supplied store, tenant ID, and environment. Only a fully verified
+caller-supplied store, tenant ID, environment, and exact approved template bytes. Only a fully verified
 projection becomes an immutable in-memory snapshot; replacement is atomic.
 The worker never derives a blob key or storage request from an HTTP request.
 
@@ -35,6 +35,8 @@ must not be treated as authorization or issuer proof.
   UTC run-start tick value. A successful reread of the same projection does
   not renew its age. Future generations are never installed.
 
+Protocol hashes alone do not make a snapshot eligible: every downloaded HTML
+candidate must pass deterministic content regeneration and exact byte equality.
 Startup is unavailable until the first successful read. A failed later refresh
 keeps the last verified snapshot only while that snapshot remains within the
 configured maximum age. Failure never replaces or extends the snapshot.

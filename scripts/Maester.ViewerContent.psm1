@@ -236,4 +236,58 @@ function ConvertTo-MaesterViewerReportProjection {
   ConvertTo-MaesterViewerReportProjectionCore -ReportBytes $ReportBytes -TemplateBytes $TemplateBytes -ExpectedTemplateSha256 $script:ApprovedTemplateSha256
 }
 
-Export-ModuleMember -Function ConvertTo-MaesterViewerReportProjection
+function Assert-MaesterViewerContentTemplate {
+  [CmdletBinding()]
+  param([Parameter(Mandatory)][byte[]]$TemplateBytes)
+  if($TemplateBytes.Length-eq 0-or$TemplateBytes.Length-gt$script:MaximumTemplateBytes){throw 'Viewer template size is invalid.'}
+  if((Get-MaesterViewerSha256 $TemplateBytes)-cne$script:ApprovedTemplateSha256){throw 'Viewer template is not the approved Maester template.'}
+  $null=ConvertFrom-MaesterViewerStrictUtf8 $TemplateBytes 'Viewer template'
+}
+
+function Assert-MaesterViewerReportProjection {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][byte[]]$HtmlBytes,
+    [Parameter(Mandatory)][byte[]]$TemplateBytes
+  )
+  try {
+    Assert-MaesterViewerContentTemplate -TemplateBytes $TemplateBytes
+    if($HtmlBytes.Length-eq 0-or$HtmlBytes.Length-gt$script:MaximumOutputBytes){throw 'invalid'}
+    $candidate=ConvertFrom-MaesterViewerStrictUtf8 $HtmlBytes 'Qualified viewer report'
+    $template=ConvertFrom-MaesterViewerStrictUtf8 $TemplateBytes 'Viewer template'
+
+    $transform='function rRe(e){let t=e.indexOf(`:`),n=e.indexOf(`?`),r=e.indexOf(`#`),i=e.indexOf(`/`);return t===-1||i!==-1&&t>i||n!==-1&&t>n||r!==-1&&t>r||iRe.test(e.slice(0,t))?e:``}'
+    $patched=ConvertTo-MaesterViewerExactLiteral $template $transform 'function rRe(){return}' 'Markdown URL transform'
+    $patched=ConvertTo-MaesterViewerExactLiteral $patched '!t&&e.HelpUrl&&' '!1&&e.HelpUrl&&' 'help link'
+    $patched=ConvertTo-MaesterViewerExactLiteral $patched 'a=i?.TenantLogos?.Banner' 'a=void 0' 'tenant banner'
+    $favicon='    <link rel="icon" type="image/x-icon" href="https://maester.dev/img/favicon.ico" />'+"`n"
+    $patched=ConvertTo-MaesterViewerExactLiteral $patched $favicon '' 'favicon'
+    $parts=Get-MaesterViewerTemplateBoundary $patched
+
+    $policyPattern='<head>\n    <meta http-equiv="Content-Security-Policy" content="default-src ''none''; script-src ''sha256-[A-Za-z0-9+/]{43}=''; style-src ''unsafe-inline''; img-src data:; font-src data:; connect-src ''none''; media-src ''none''; object-src ''none''; frame-src ''none''; worker-src ''none''; base-uri ''none''; form-action ''none''" />'
+    $policyMatches=[regex]::Matches($candidate,$policyPattern,[Text.RegularExpressions.RegexOptions]::CultureInvariant)
+    if($policyMatches.Count-ne 1){throw 'invalid'}
+    $withoutPolicy=$candidate.Remove($policyMatches[0].Index,$policyMatches[0].Length).Insert($policyMatches[0].Index,'<head>')
+    $prefix=$parts.Prefix+'JSON.parse('
+    $suffix=')'+$parts.Suffix
+    if(-not$withoutPolicy.StartsWith($prefix,[StringComparison]::Ordinal)-or-not$withoutPolicy.EndsWith($suffix,[StringComparison]::Ordinal)){throw 'invalid'}
+    $literalLength=$withoutPolicy.Length-$prefix.Length-$suffix.Length
+    if($literalLength-le 1){throw 'invalid'}
+    $literal=$withoutPolicy.Substring($prefix.Length,$literalLength)
+    try {
+      $literalDocument=[Text.Json.JsonDocument]::Parse($literal)
+      try {
+        if($literalDocument.RootElement.ValueKind-ne[Text.Json.JsonValueKind]::String){throw 'invalid'}
+        $rawJson=$literalDocument.RootElement.GetString()
+      } finally {$literalDocument.Dispose()}
+    } catch {throw 'invalid'}
+    if([string]::IsNullOrEmpty($rawJson)){throw 'invalid'}
+    $rawParts=Get-MaesterViewerTemplateBoundary $template
+    $rawReport=[Text.UTF8Encoding]::new($false).GetBytes($rawParts.Prefix+$rawJson+$rawParts.Suffix)
+    $rebuilt=ConvertTo-MaesterViewerReportProjection -ReportBytes $rawReport -TemplateBytes $TemplateBytes
+    if($rebuilt.HtmlBytes.Length-ne$HtmlBytes.Length-or-not[Security.Cryptography.CryptographicOperations]::FixedTimeEquals($rebuilt.HtmlBytes,$HtmlBytes)){throw 'invalid'}
+    [pscustomobject]@{ Qualified=$true; HtmlLength=[long]$HtmlBytes.Length; HtmlSha256=(Get-MaesterViewerSha256 $HtmlBytes); TemplateSha256=$script:ApprovedTemplateSha256; Policy='maester-viewer-content-v1' }
+  } catch {throw 'Viewer report is not an approved qualified projection.'}
+}
+
+Export-ModuleMember -Function ConvertTo-MaesterViewerReportProjection, Assert-MaesterViewerContentTemplate, Assert-MaesterViewerReportProjection

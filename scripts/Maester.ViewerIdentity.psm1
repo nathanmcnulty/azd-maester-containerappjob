@@ -3,6 +3,7 @@ Set-StrictMode -Version Latest
 
 Import-Module (Join-Path $PSScriptRoot 'Maester.ViewerProjection.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'Maester.ViewerWorker.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'Maester.ViewerContent.psm1') -Force
 
 if (-not ('MaesterContainerAppIdentityCredential' -as [type])) {
   Add-Type -TypeDefinition @'
@@ -192,6 +193,7 @@ function Start-MaesterViewerEntrypoint {
     [Parameter(Mandatory)][string]$TenantId,
     [Parameter(Mandatory)][string]$Environment,
     [Parameter(Mandatory)][string]$UserAssignedIdentityClientId,
+    [Parameter(Mandatory)][byte[]]$TemplateBytes,
     [ValidateRange(1, 65535)][int]$Port = 8081,
     [ValidateScript({ $_ -ge [TimeSpan]::FromMilliseconds(100) -and $_ -le [TimeSpan]::FromHours(1) })]
     [TimeSpan]$PollInterval = [TimeSpan]::FromSeconds(30),
@@ -211,13 +213,15 @@ function Start-MaesterViewerEntrypoint {
   $tenant = [guid]::Empty
   if (-not [guid]::TryParseExact($TenantId, 'D', [ref]$tenant) -or $tenant -eq [guid]::Empty -or $TenantId -cne $tenant.ToString('D') -or
       $Environment -cnotmatch '\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z') { throw 'Viewer configuration is invalid.' }
+  try { Assert-MaesterViewerContentTemplate -TemplateBytes $TemplateBytes }
+  catch { throw 'Viewer configuration is invalid.' }
   $credential = $null
   try {
     $credential = New-MaesterContainerAppIdentityCredential -ClientId $UserAssignedIdentityClientId -AcquisitionTimeout $TokenAcquisitionTimeout -HttpMessageHandler $IdentityHttpMessageHandler -TimeProvider $TimeProvider
     $tokenProvider = { $credential.GetToken() }.GetNewClosure()
     $store = New-MaesterAzureBlobProjectionStore -AccountName $StorageAccountName -ContainerName $ProjectionContainerName -TokenProvider $tokenProvider -HttpMessageHandler $ProjectionHttpMessageHandler
     $null = $credential.GetToken()
-    Start-MaesterViewerWorker -TenantId $TenantId -Environment $Environment -Store $store -Port $Port -PollInterval $PollInterval `
+    Start-MaesterViewerWorker -TenantId $TenantId -Environment $Environment -TemplateBytes $TemplateBytes -Store $store -Port $Port -PollInterval $PollInterval `
       -MaximumReportAge $MaximumReportAge -MaximumConcurrentRequests $MaximumConcurrentRequests `
       -ClientWriteTimeout $ClientWriteTimeout -MaximumHtmlBytes $MaximumHtmlBytes -CancellationToken $CancellationToken
   } catch {

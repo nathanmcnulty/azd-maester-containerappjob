@@ -41,6 +41,18 @@ jobs:
           }
       - name: Install test dependencies
         run: Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force
+      - name: Prepare exact Maester viewer template fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/maester-2.2.0.nupkg"
+          assets="$RUNNER_TEMP/maester-viewer-assets"
+          curl --fail --location --output "$archive" 'https://www.powershellgallery.com/api/v2/package/Maester/2.2.0'
+          echo "8c8a9757771177bd89785262e6b38385cf5e5c19bb799e4399e77f6439ad699c  $archive" | sha256sum --check
+          mkdir "$assets"
+          unzip -q "$archive" assets/ReportTemplate.html -d "$assets"
+          echo "a7b8dae3d5932c3096fa98709aaab9e9c1ebbfb83b5519e524b734ec751e3416  $assets/assets/ReportTemplate.html" | sha256sum --check
+          echo "MAESTER_VIEWER_TEMPLATE_PATH=$assets/assets/ReportTemplate.html" >> "$GITHUB_ENV"
       - name: Install pinned Caddy validation binary
         shell: bash
         run: |

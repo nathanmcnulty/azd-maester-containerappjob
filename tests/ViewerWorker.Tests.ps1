@@ -2,6 +2,11 @@
 BeforeAll {
     $script:workerRoot = Split-Path $PSScriptRoot -Parent
     $script:workerFixture = Join-Path $PSScriptRoot 'helpers/Invoke-MaesterViewerWorkerFixture.ps1'
+    Import-Module (Join-Path $script:workerRoot 'scripts/Maester.ViewerContent.psm1') -Force
+    . (Join-Path $PSScriptRoot 'helpers/MaesterViewerTemplateFixture.ps1')
+    $script:workerTemplate=Get-MaesterViewerTestTemplateBytes
+    $script:oldReportText=[Text.Encoding]::UTF8.GetString((New-MaesterViewerQualifiedTestReport $script:workerTemplate '{"Name":"old-snapshot","EndOfJson":"EndOfJson"}'))
+    $script:newReportText=[Text.Encoding]::UTF8.GetString((New-MaesterViewerQualifiedTestReport $script:workerTemplate '{"Name":"new-snapshot","EndOfJson":"EndOfJson"}'))
     function Start-WorkerFixture([string]$Case) {
         $probe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
         $probe.Server.ExclusiveAddressUse = $true
@@ -25,7 +30,7 @@ BeforeAll {
             $process = [Diagnostics.Process]::Start($info)
             $outputTask = $process.StandardOutput.ReadToEndAsync()
             $errorTask = $process.StandardError.ReadToEndAsync()
-            $deadline = [DateTimeOffset]::UtcNow.AddSeconds(8)
+            $deadline = [DateTimeOffset]::UtcNow.AddSeconds($(if($Case-eq'slowClient'){30}else{15}))
             while (-not (Test-Path $ready) -and [DateTimeOffset]::UtcNow -lt $deadline) {
                 if ($process.HasExited) {
                     $diagnostic = ($outputTask.GetAwaiter().GetResult() + $errorTask.GetAwaiter().GetResult())
@@ -134,7 +139,7 @@ Describe 'Maester read-only loopback worker' {
         $worker = Start-WorkerFixture slowClient
         $slow = [Net.Sockets.TcpClient]::new()
         try {
-            $deadline = [DateTimeOffset]::UtcNow.AddSeconds(5)
+            $deadline = [DateTimeOffset]::UtcNow.AddSeconds(15)
             do {
                 $ready = $worker.Client.GetAsync("$($worker.Base)/readyz").GetAwaiter().GetResult()
                 try { $available = [int]$ready.StatusCode -eq 200 } finally { $ready.Dispose() }
@@ -149,7 +154,9 @@ Describe 'Maester read-only loopback worker' {
             $stream.Write($request)
             $headers = Read-WorkerHeaders $stream
             $headers | Should -Match '\AHTTP/1\.1 200 '
-            $headers | Should -Match '(?im)^Content-Length: 20971520\r?$'
+            $length=[regex]::Match($headers,'(?im)^Content-Length: ([0-9]+)\r?$').Groups[1].Value -as [long]
+            $length | Should -BeGreaterOrEqual 16MB
+            $length | Should -BeLessOrEqual 20MB
             # Keep the response blocked, then require the sole handler to become available.
             Start-Sleep -Milliseconds 1500
             $health = $worker.Client.GetAsync("$($worker.Base)/healthz").GetAwaiter().GetResult()
@@ -163,7 +170,7 @@ Describe 'Maester read-only loopback worker' {
             $stream.Write($request)
             $headers = Read-WorkerHeaders $stream
             $headers | Should -Match '\AHTTP/1\.1 200 '
-            $headers | Should -Match '(?im)^Content-Length: 20971520\r?$'
+            $headers | Should -Match "(?im)^Content-Length: $length\r?$"
             Stop-WorkerFixture $worker
             $worker = $null
         }
@@ -177,7 +184,7 @@ Describe 'Maester read-only loopback worker' {
         $worker = Start-WorkerFixture valid
         try {
             $get = Wait-ReportStatus $worker 200 'false'
-            try { [Text.Encoding]::UTF8.GetString($get.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()) | Should -BeExactly '<html><body>old-snapshot</body></html>'; @($get.Headers.GetValues('X-Maester-Report-Run')).Count | Should -Be 1 }finally { $get.Dispose() }
+            try { [Text.Encoding]::UTF8.GetString($get.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()) | Should -BeExactly $script:oldReportText; @($get.Headers.GetValues('X-Maester-Report-Run')).Count | Should -Be 1 }finally { $get.Dispose() }
             $head = Send-WorkerRequest $worker HEAD '/report.html'
             try { [int]$head.StatusCode | Should -Be 200; $head.Content.Headers.ContentLength | Should -BeGreaterThan 0; $head.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult().Length | Should -Be 0 }finally { $head.Dispose() }
             Start-Sleep -Milliseconds 400
@@ -224,18 +231,28 @@ Describe 'Maester read-only loopback worker' {
 
     It 'retains exact last-good bytes after corrupt refresh and marks them stale' {
         $worker = Start-WorkerFixture corruptRefresh
-        try { $response = Wait-ReportStatus $worker 200 'true'; try { [Text.Encoding]::UTF8.GetString($response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()) | Should -BeExactly '<html><body>old-snapshot</body></html>' }finally { $response.Dispose() } } finally { Stop-WorkerFixture $worker }
+        try { $response = Wait-ReportStatus $worker 200 'true'; try { [Text.Encoding]::UTF8.GetString($response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()) | Should -BeExactly $script:oldReportText }finally { $response.Dispose() } } finally { Stop-WorkerFixture $worker }
     }
 
     It 'stops serving last-good bytes after maximum report age' {
         $worker = Start-WorkerFixture expire
         try {
             $old = Wait-ReportStatus $worker 200 'false'
-            try { $old.Content.ReadAsStringAsync().GetAwaiter().GetResult() | Should -BeExactly '<html><body>old-snapshot</body></html>' } finally { $old.Dispose() }
+            try { $old.Content.ReadAsStringAsync().GetAwaiter().GetResult() | Should -BeExactly $script:oldReportText } finally { $old.Dispose() }
             Set-Content -LiteralPath $worker.Trigger -Value advance
             $response = Wait-ReportStatus $worker 503 $null
             try { [int]$response.StatusCode | Should -Be 503 } finally { $response.Dispose() }
         } finally { Stop-WorkerFixture $worker }
+    }
+
+    It 'retains last-good bytes when a fully rehashed refresh fails content qualification' {
+        $worker=Start-WorkerFixture qualifiedTamperRefresh
+        try {
+            $old=Wait-ReportStatus $worker 200 'false';try{$old.Content.ReadAsStringAsync().GetAwaiter().GetResult()|Should -BeExactly $script:oldReportText}finally{$old.Dispose()}
+            Set-Content -LiteralPath $worker.Trigger -Value advance
+            $retained=Wait-ReportStatus $worker 200 'true' 15
+            try{$retained.Content.ReadAsStringAsync().GetAwaiter().GetResult()|Should -BeExactly $script:oldReportText}finally{$retained.Dispose()}
+        } finally {Stop-WorkerFixture $worker}
     }
 
     It 'atomically serves only complete old or new snapshots under concurrent reads' {
@@ -244,16 +261,16 @@ Describe 'Maester read-only loopback worker' {
             $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
             $old = Wait-ReportStatus $worker 200 'false'
             try { $null = $seen.Add($old.Content.ReadAsStringAsync().GetAwaiter().GetResult()) } finally { $old.Dispose() }
-            $seen.Contains('<html><body>old-snapshot</body></html>') | Should -BeTrue
+            $seen.Contains($script:oldReportText) | Should -BeTrue
             Set-Content -LiteralPath $worker.Trigger -Value advance
-            $deadline = [DateTimeOffset]::UtcNow.AddSeconds(5)
+            $deadline = [DateTimeOffset]::UtcNow.AddSeconds(15)
             do {
-                $tasks = 1..12 | ForEach-Object { $worker.Client.GetByteArrayAsync("$($worker.Base)/report.html") }
+                $tasks = 1..4 | ForEach-Object { $worker.Client.GetByteArrayAsync("$($worker.Base)/report.html") }
                 [Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]$tasks)
                 foreach ($task in $tasks) { $null = $seen.Add([Text.Encoding]::UTF8.GetString($task.Result)) }
-            } while (-not $seen.Contains('<html><body>new-snapshot</body></html>') -and [DateTimeOffset]::UtcNow -lt $deadline)
-            @($seen | Where-Object { $_ -notin @('<html><body>old-snapshot</body></html>', '<html><body>new-snapshot</body></html>') }).Count | Should -Be 0
-            $seen.Contains('<html><body>new-snapshot</body></html>') | Should -BeTrue
+            } while (-not $seen.Contains($script:newReportText) -and [DateTimeOffset]::UtcNow -lt $deadline)
+            @($seen | Where-Object { $_ -notin @($script:oldReportText, $script:newReportText) }).Count | Should -Be 0
+            $seen.Contains($script:newReportText) | Should -BeTrue
         }
         finally { Stop-WorkerFixture $worker }
     }

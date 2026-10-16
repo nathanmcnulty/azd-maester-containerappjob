@@ -1,9 +1,9 @@
 # Viewer projection protocol candidate
 
-This source-only candidate defines the private snapshot boundary for the optional
-Container App viewer. It does not enable a viewer, change the Maester runner,
-provision identities or roles, serve HTML, or add a shared component dependency.
-Those integration and qualification gates remain in MCAJ-007.
+This candidate defines the private snapshot boundary for the optional Container
+App viewer. The default-off runner and read-only worker now use it, but no
+deployment enables the feature or provisions its private container, identities,
+roles, ingress, or authentication. Those deployment gates remain in MCAJ-007.
 
 ## Fixed objects and identities
 
@@ -32,10 +32,11 @@ An equal generation is idempotent only for the same run and manifest hash;
 another candidate is a collision. An older candidate may finish its immutable
 objects but never replaces a newer pointer.
 
-The HTML check proves only nonempty bounded strict UTF-8 beginning with an HTML
-document marker. It does not sanitize active content, prove that a Maester report
-is self-contained, qualify external assets, or make the content safe to serve.
-Those content and viewer gates remain open.
+Publication and read acceptance require the exact hash-bound Maester content
+projection in addition to protocol hashes and lengths. The publisher validates
+before its first store call. The reader downloads only protocol-derived keys,
+regenerates the candidate against the exact approved template, and returns bytes
+only after byte equality and the final unchanged-pointer read.
 
 ## Publish and read algorithms
 

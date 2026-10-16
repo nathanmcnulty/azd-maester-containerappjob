@@ -6,6 +6,10 @@ param(
     [Parameter(Mandatory)][string]$OutputDirectory
 )
 $ErrorActionPreference = 'Stop'
+Import-Module (Join-Path $Root 'scripts/Maester.ViewerContent.psm1') -Force
+. (Join-Path $Root 'tests/helpers/MaesterViewerTemplateFixture.ps1')
+$templateBytes=Get-MaesterViewerTestTemplateBytes
+$expectedReport=[Text.Encoding]::UTF8.GetString((New-MaesterViewerQualifiedTestReport $templateBytes '{"Name":"old-snapshot","EndOfJson":"EndOfJson"}'))
 $null = New-Item -ItemType Directory -Path $OutputDirectory -Force
 $checks = [Collections.Generic.List[string]]::new()
 $processes = [Collections.Generic.List[Diagnostics.Process]]::new()
@@ -47,7 +51,7 @@ try {
     $caddy = Start-ProxyProcess $CaddyPath @('run', '--config', $ConfigPath, '--adapter', 'caddyfile') caddy
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds(10)
     do { try { $text = $http.GetStringAsync('http://127.0.0.1:8080/report.html').GetAwaiter().GetResult(); $proxyReady = $true }catch { $proxyReady = $false; Start-Sleep -Milliseconds 50 }; if ($caddy.HasExited) { throw 'Caddy exited before proxy validation.' } }while (-not$proxyReady -and [DateTimeOffset]::UtcNow -lt $deadline)
-    Assert-Proxy ($proxyReady -and $text -ceq '<html><body>old-snapshot</body></html>') 'Real Caddy forwards exact verified report bytes from the worker'
+    Assert-Proxy ($proxyReady -and $text -ceq $expectedReport) 'Real Caddy forwards exact verified report bytes from the worker'
     $head = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Head, 'http://127.0.0.1:8080/report.html')
     try { $response = $http.SendAsync($head).GetAwaiter().GetResult(); try { Assert-Proxy ([int]$response.StatusCode -eq 200 -and $response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult().Length -eq 0 -and $response.Content.Headers.ContentLength -gt 0) 'HEAD retains length and has no response body' }finally { $response.Dispose() } }finally { $head.Dispose() }
     foreach ($target in '/report.html?destination=https://example.invalid', '/%72eport.html', '/runs/secret/report.html', '/latest.json', '/Caddyfile', '/', '/config/') {
@@ -59,7 +63,7 @@ try {
     $body = Send-RawProxy GET '/report.html' "Content-Length: 1`r`n" x
     Assert-Proxy ($body -match '\AHTTP/1\.[01] 400 ' -and $body -notmatch 'old-snapshot') 'Request body rejected by the worker through real Caddy'
     $forged = Send-RawProxy GET '/report.html' "Authorization: Bearer synthetic-only`r`nX-MS-CLIENT-PRINCIPAL: synthetic-only`r`nX-Forwarded-Host: example.invalid`r`nX-Forwarded-Proto: https`r`n"
-    Assert-Proxy ($forged -match '\AHTTP/1\.[01] 200 ' -and $forged.Contains('<html><body>old-snapshot</body></html>') -and $forged -notmatch 'synthetic-only|example.invalid') 'Request host and headers do not change the fixed upstream or enter the response'
+    Assert-Proxy ($forged -match '\AHTTP/1\.[01] 200 ' -and $forged.Contains('old-snapshot') -and $forged -notmatch 'synthetic-only|example.invalid') 'Request host and headers do not change the fixed upstream or enter the response'
     foreach ($path in '/healthz', '/readyz') {
         $probe = $http.GetAsync("http://127.0.0.1:8080$path").GetAwaiter().GetResult()
         try { $content = $probe.Content.ReadAsStringAsync().GetAwaiter().GetResult(); Assert-Proxy ([int]$probe.StatusCode -eq 200 -and $content -notmatch 'old-snapshot|11111111|worker-test|Projection') "Minimal probe through Caddy: $path" }finally { $probe.Dispose() }

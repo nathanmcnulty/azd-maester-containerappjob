@@ -16,10 +16,12 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'Maester.ViewerIdentity.psm1') -Force
+$templatePath='/opt/maester-viewer/assets/ReportTemplate.html'
+$templateBytes=[IO.File]::ReadAllBytes($templatePath)
 $signals = [MaesterViewerProcessCancellation]::new()
 try {
   Start-MaesterViewerEntrypoint -StorageAccountName $StorageAccountName -ProjectionContainerName $ProjectionContainerName `
-    -TenantId $TenantId -Environment $Environment -UserAssignedIdentityClientId $UserAssignedIdentityClientId -Port $Port `
+    -TenantId $TenantId -Environment $Environment -UserAssignedIdentityClientId $UserAssignedIdentityClientId -TemplateBytes $templateBytes -Port $Port `
     -PollInterval ([TimeSpan]::FromSeconds($PollIntervalSeconds)) -MaximumReportAge ([TimeSpan]::FromSeconds($MaximumReportAgeSeconds)) `
     -MaximumConcurrentRequests $MaximumConcurrentRequests -ClientWriteTimeout ([TimeSpan]::FromSeconds($ClientWriteTimeoutSeconds)) `
     -MaximumHtmlBytes $MaximumHtmlBytes -TokenAcquisitionTimeout ([TimeSpan]::FromSeconds($TokenAcquisitionTimeoutSeconds)) `

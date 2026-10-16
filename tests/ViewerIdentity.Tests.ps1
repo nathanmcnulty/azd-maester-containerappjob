@@ -2,6 +2,8 @@
 BeforeAll {
   $script:viewerRoot = Split-Path $PSScriptRoot -Parent
   Import-Module (Join-Path $script:viewerRoot 'scripts/Maester.ViewerIdentity.psm1') -Force
+  . (Join-Path $PSScriptRoot 'helpers/MaesterViewerTemplateFixture.ps1')
+  $script:templateBytes=Get-MaesterViewerTestTemplateBytes
   if (-not ('MaesterIdentityTestHandler' -as [type])) {
     Add-Type -TypeDefinition @'
 using System;
@@ -212,7 +214,7 @@ Describe 'Viewer identity entrypoint composition' {
     foreach($case in $cases){
       $probe=[Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,0);try{$probe.Start();$port=$probe.LocalEndpoint.Port}finally{$probe.Stop()}
       $handler=[MaesterIdentityTestHandler]::new();$cts=[Threading.CancellationTokenSource]::new();$cts.Cancel()
-      $settings=@{StorageAccountName='vieweraccount';ProjectionContainerName='viewer-projection';TenantId='22222222-2222-2222-2222-222222222222';Environment='test';UserAssignedIdentityClientId='11111111-1111-1111-1111-111111111111'}
+      $settings=@{StorageAccountName='vieweraccount';ProjectionContainerName='viewer-projection';TenantId='22222222-2222-2222-2222-222222222222';Environment='test';UserAssignedIdentityClientId='11111111-1111-1111-1111-111111111111';TemplateBytes=$script:templateBytes}
       foreach($key in $case.Keys){if($key-ne'name'){$settings[$key]=$case[$key]}}
       try {
         {Start-MaesterViewerEntrypoint @settings -Port $port -CancellationToken $cts.Token -IdentityHttpMessageHandler $handler}|Should -Throw

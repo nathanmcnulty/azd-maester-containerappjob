@@ -4,8 +4,9 @@
 viewer process. It composes an explicit Container Apps user-assigned managed
 identity credential, the existing Azure Blob projection store, and the existing
 loopback worker. Storage account, projection container, canonical tenant ID,
-environment token, canonical nonzero identity client ID, and every listener or
-size setting are validated before the worker starts listening.
+environment token, canonical nonzero identity client ID, the image's fixed
+approved template, and every listener or size setting are validated before
+token acquisition or listener startup.
 
 The credential has no Azure SDK, login command, device-code path, default
 credential chain, system-assigned fallback, or CLI fallback. On an actual token

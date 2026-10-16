@@ -14,6 +14,10 @@ On 2026-10-15 the Docker registry resolved its index digest as
 and identified the upstream source as `debuerreotype/docker-debian-artifacts`.
 PowerShell and Caddy are downloaded only during the build from their official
 GitHub releases and must match the committed SHA-256 values before extraction.
+The build also downloads the locked Maester 2.2.0 package, verifies its package
+SHA-256, extracts only `assets/ReportTemplate.html`, verifies the approved
+template SHA-256, and copies that file to a fixed worker path. The entrypoint
+accepts no template path override.
 The Debian packages are resolved from the live signed Debian repositories and
 are not snapshot- or version-pinned, so the complete build is not reproducible
 from these source pins alone. The runtime images perform no downloads and

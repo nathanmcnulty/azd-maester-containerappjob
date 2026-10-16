@@ -33,6 +33,18 @@ BeforeAll {
 }
 
 Describe 'Maester viewer content qualification' {
+  It 'regenerates and accepts only the exact public qualified bytes from the approved template' {
+    $exactTemplate=[IO.File]::ReadAllBytes($env:MAESTER_VIEWER_TEMPLATE_PATH)
+    $exactText=[Text.UTF8Encoding]::new($false,$true).GetString($exactTemplate)
+    $end=[regex]::Match($exactText,'EndOfJson:(?:"EndOfJson"|`EndOfJson`)\}');$starts=[regex]::Matches($exactText.Substring(0,$end.Index),'(?:var|const|let)\s+\w+\s*=');$start=$starts[$starts.Count-1]
+    $raw=[Text.UTF8Encoding]::new($false).GetBytes($exactText.Substring(0,$start.Index+$start.Length)+'{"Mixed":"</script> & < > \\ / \"    ","EndOfJson":"EndOfJson","OutputFiles":["report.html"]}'+$exactText.Substring($end.Index+$end.Length))
+    $qualified=ConvertTo-MaesterViewerReportProjection -ReportBytes $raw -TemplateBytes $exactTemplate
+    $receipt=Assert-MaesterViewerReportProjection -HtmlBytes $qualified.HtmlBytes -TemplateBytes $exactTemplate
+    $receipt.Qualified|Should -BeTrue;$receipt.HtmlSha256|Should -BeExactly $qualified.HtmlSha256
+    $tampered=[byte[]]$qualified.HtmlBytes.Clone();$tampered[100]=[byte]($tampered[100]-bxor 1)
+    {Assert-MaesterViewerReportProjection -HtmlBytes $tampered -TemplateBytes $exactTemplate}|Should -Throw '*approved qualified*'
+  }
+
   It 'preserves JSON values while disabling every approved URL sink' {
     $json='{"TenantName":"Synthetic caf\u00e9 \u6771\u4eac","HelpUrl":"javascript:alert(1)","TenantLogos":{"Banner":"https://example.invalid/logo"},"ResultDetail":{"TestResult":"[link](https://example.invalid) ![image](https://example.invalid/x)"},"EndOfJson":"EndOfJson"}'
     $result=Invoke-SyntheticConversion (Get-TestReportByte $json)

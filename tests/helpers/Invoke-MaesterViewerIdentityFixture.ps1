@@ -8,6 +8,7 @@ param(
 )
 $ErrorActionPreference='Stop'
 Import-Module (Join-Path $Root 'scripts/Maester.ViewerIdentity.psm1') -Force
+. (Join-Path $Root 'tests/helpers/MaesterViewerTemplateFixture.ps1')
 if($Mode-eq'SignalOwner'){
   $owner=[MaesterViewerProcessCancellation]::new()
   try{Set-Content -LiteralPath $ReadyPath -Value ready -Encoding ascii;if(-not$owner.Token.WaitHandle.WaitOne([TimeSpan]::FromSeconds(15))){exit 2};exit 0}finally{$owner.Dispose()}
@@ -35,11 +36,12 @@ public static class MaesterViewerIdentityFixtureStop {
 $env:IDENTITY_ENDPOINT='http://127.0.0.1:40342/msi/token';$env:IDENTITY_HEADER='fixture-header'
 $cts=[Threading.CancellationTokenSource]::new();$watch=[MaesterViewerIdentityFixtureStop]::Watch($StopPath,$cts)
 $identity=[MaesterViewerIdentityFixtureHandler]::new($true);$projection=[MaesterViewerIdentityFixtureHandler]::new($false)
+$templateBytes=Get-MaesterViewerTestTemplateBytes
 Set-Content -LiteralPath $ReadyPath -Value ready -Encoding ascii
 try {
   Start-MaesterViewerEntrypoint -StorageAccountName vieweraccount -ProjectionContainerName viewer-projection `
     -TenantId '22222222-2222-2222-2222-222222222222' -Environment fixture `
-    -UserAssignedIdentityClientId '11111111-1111-1111-1111-111111111111' -Port $Port `
+    -UserAssignedIdentityClientId '11111111-1111-1111-1111-111111111111' -TemplateBytes $templateBytes -Port $Port `
     -PollInterval ([TimeSpan]::FromMilliseconds(100)) -CancellationToken $cts.Token `
     -IdentityHttpMessageHandler $identity -ProjectionHttpMessageHandler $projection
 } finally {

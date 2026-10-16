@@ -30,6 +30,7 @@ try {
   Assert-Sequence $workerInspect[0].Config.Entrypoint @('/opt/microsoft/powershell/7/pwsh','-NoLogo','-NoProfile','-NonInteractive','-File','/opt/maester-viewer/scripts/Start-MaesterViewer.ps1') workerEntrypoint
   Assert-Sequence $caddyInspect[0].Config.Entrypoint @('/usr/local/bin/caddy','run','--config','/etc/caddy/Caddyfile','--adapter','caddyfile') caddyEntrypoint
   $version=(Invoke-Docker @('run','--rm','--entrypoint','/opt/microsoft/powershell/7/pwsh',$WorkerImage,'-NoLogo','-NoProfile','-Command','$PSVersionTable.PSVersion.ToString()')).Output.Trim();Assert-Equal $version '7.6.6' powerShellVersion
+  $templateHash=(Invoke-Docker @('run','--rm','--entrypoint','/opt/microsoft/powershell/7/pwsh',$WorkerImage,'-NoLogo','-NoProfile','-Command','[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([IO.File]::ReadAllBytes("/opt/maester-viewer/assets/ReportTemplate.html")))')).Output.Trim();Assert-Equal $templateHash 'A7B8DAE3D5932C3096FA98709AAAB9E9C1EBBFB83B5519E524B734EC751E3416' templateHash
   Assert-Equal (Invoke-Docker @('run','--rm','--entrypoint','/usr/bin/id',$WorkerImage,'-u')).Output.Trim() '65532' workerRuntimeUser
   Assert-Match (Invoke-Docker @('run','--rm','--entrypoint','/usr/local/bin/caddy',$CaddyImage,'version')).Output '^v2\.11\.7 ' caddyVersion
   $null=Invoke-Docker @('run','--rm','--read-only','--tmpfs','/tmp:rw,noexec,nosuid,nodev,size=16m','--cap-drop','ALL','--security-opt','no-new-privileges','--entrypoint','/usr/local/bin/caddy',$CaddyImage,'validate','--config','/etc/caddy/Caddyfile','--adapter','caddyfile')
@@ -62,7 +63,7 @@ http://127.0.0.1:40342 {
   Assert-Equal (Invoke-Docker @('exec',$proxy,'/usr/bin/cat','/proc/1/comm')).Output.Trim() 'caddy' caddyPid1
   $null=Invoke-Docker @('stop','--time','20',$worker);Assert-Equal ([int](Invoke-Docker @('inspect','--format','{{.State.ExitCode}}',$worker)).Output.Trim()) 0 workerExit
   $null=Invoke-Docker @('stop','--time','20',$proxy);Assert-Equal ([int](Invoke-Docker @('inspect','--format','{{.State.ExitCode}}',$proxy)).Output.Trim()) 0 caddyExit
-  Add-Record workerImageId $workerImageId;Add-Record caddyImageId $caddyImageId;Add-Record imageUser '65532:65532';Add-Record powerShell $version;Add-Record healthStatus 200;Add-Record reportStatus 503;Add-Record workerExit 0;Add-Record caddyExit 0
+  Add-Record workerImageId $workerImageId;Add-Record caddyImageId $caddyImageId;Add-Record imageUser '65532:65532';Add-Record powerShell $version;Add-Record templateSha256 $templateHash;Add-Record healthStatus 200;Add-Record reportStatus 503;Add-Record workerExit 0;Add-Record caddyExit 0
   $records|ConvertTo-Json -Depth 4|Set-Content (Join-Path $OutputDirectory 'result.json') -Encoding utf8
 } catch {
   foreach($item in @(@{Name=$worker;File='worker.log'},@{Name=$proxy;File='caddy.log'})){

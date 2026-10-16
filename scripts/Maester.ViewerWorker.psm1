@@ -151,6 +151,7 @@ function Start-MaesterViewerWorker {
     [Parameter(Mandatory)][string]$TenantId,
     [Parameter(Mandatory)][string]$Environment,
     [Parameter(Mandatory)][scriptblock]$Store,
+    [Parameter(Mandatory)][byte[]]$TemplateBytes,
     [ValidateRange(1, 65535)][int]$Port = 8081,
     [ValidateScript({ $_ -ge [TimeSpan]::FromMilliseconds(100) -and $_ -le [TimeSpan]::FromHours(1) })]
     [TimeSpan]$PollInterval = [TimeSpan]::FromSeconds(30),
@@ -170,7 +171,7 @@ function Start-MaesterViewerWorker {
     $server.Start()
     while (-not $CancellationToken.IsCancellationRequested) {
       try {
-        $snapshot = Read-MaesterViewerProjection -TenantId $TenantId -Environment $Environment -Store $Store -MaximumHtmlBytes $MaximumHtmlBytes
+        $snapshot = Read-MaesterViewerProjection -TenantId $TenantId -Environment $Environment -TemplateBytes $TemplateBytes -Store $Store -MaximumHtmlBytes $MaximumHtmlBytes
         $ticks = [long]0
         if ($snapshot.generation -isnot [string] -or -not [long]::TryParse(
             $snapshot.generation, [Globalization.NumberStyles]::None, [Globalization.CultureInfo]::InvariantCulture, [ref]$ticks)) {

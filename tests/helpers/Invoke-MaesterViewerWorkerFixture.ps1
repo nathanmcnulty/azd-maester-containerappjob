@@ -1,6 +1,6 @@
 #Requires -Version 7.6
 param(
-    [Parameter(Mandatory)][ValidateSet('valid', 'missing', 'corruptRefresh', 'switchSnapshot', 'future', 'expire', 'slowClient')][string]$Case,
+    [Parameter(Mandatory)][ValidateSet('valid', 'missing', 'corruptRefresh', 'qualifiedTamperRefresh', 'switchSnapshot', 'future', 'expire', 'slowClient')][string]$Case,
     [Parameter(Mandatory)][string]$Root,
     [Parameter(Mandatory)][int]$Port,
     [Parameter(Mandatory)][string]$StopPath,
@@ -9,6 +9,8 @@ param(
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $Root 'scripts/Maester.ViewerWorker.psm1') -Force
 Import-Module (Join-Path $Root 'scripts/Maester.ViewerProjection.psm1') -Force
+Import-Module (Join-Path $Root 'scripts/Maester.ViewerContent.psm1') -Force
+. (Join-Path $Root 'tests/helpers/MaesterViewerTemplateFixture.ps1')
 
 if (-not ('MaesterViewerFixtureStop' -as [type])) {
     Add-Type -TypeDefinition @'
@@ -62,17 +64,16 @@ $manual = [MaesterViewerManualTimeProvider]::new($now)
 $workerModule = Get-Module Maester.ViewerWorker
 & $workerModule { param($provider) $script:MaesterViewerTimeProvider = $provider } $manual
 $fixture = New-FixtureStore
-$old = [Text.Encoding]::UTF8.GetBytes('<html><body>old-snapshot</body></html>')
-$new = [Text.Encoding]::UTF8.GetBytes('<html><body>new-snapshot</body></html>')
+$templateBytes=Get-MaesterViewerTestTemplateBytes
+$old = New-MaesterViewerQualifiedTestReport $templateBytes '{"Name":"old-snapshot","EndOfJson":"EndOfJson"}'
 if ($Case -eq 'slowClient') {
-    $old = [byte[]]::new(20MB)
-    [Array]::Fill[byte]($old, [byte]120)
-    [Text.Encoding]::ASCII.GetBytes('<html>').CopyTo($old, 0)
-    [Text.Encoding]::ASCII.GetBytes('</html>').CopyTo($old, $old.Length - 7)
+    $padding='<'*2500000
+    $old=New-MaesterViewerQualifiedTestReport $templateBytes ('{"Padding":"'+$padding+'","EndOfJson":"EndOfJson"}')
+    if($old.Length-lt 16MB-or$old.Length-gt 20MB){throw 'Slow-client qualified fixture size is outside its intended boundary.'}
 }
 if ($Case -ne 'missing') {
     $started = if ($Case -eq 'future') { $now.AddMinutes(1) } else { $now.AddMinutes(-5) }
-    $null = Publish-MaesterViewerProjection -HtmlBytes $old -TenantId $tenant -Environment $environment -RunId $run1 -RunStartedAtUtc $started -Store $fixture.Store
+    $null = Publish-MaesterViewerProjection -HtmlBytes $old -TemplateBytes $templateBytes -TenantId $tenant -Environment $environment -RunId $run1 -RunStartedAtUtc $started -Store $fixture.Store
 }
 if ($Case -eq 'future') {
     $fixture.State.Before = {
@@ -101,9 +102,29 @@ elseif ($Case -eq 'corruptRefresh') {
         }
     }
 }
+elseif ($Case -eq 'qualifiedTamperRefresh') {
+    $forged=New-FixtureStore
+    $candidate=New-MaesterViewerQualifiedTestReport $templateBytes '{"Name":"forged-new","EndOfJson":"EndOfJson"}'
+    $null=Publish-MaesterViewerProjection -HtmlBytes $candidate -TemplateBytes $templateBytes -TenantId $tenant -Environment $environment -RunId $run2 -RunStartedAtUtc $now.AddMinutes(-1) -Store $forged.Store
+    $htmlKey="runs/$run2/report.html";$manifestKey="runs/$run2/manifest.json"
+    $tampered=[byte[]]$forged.State.Items[$htmlKey].bytes.Clone();$tampered[100]=[byte]($tampered[100]-bxor 1);$forged.State.Items[$htmlKey].bytes=$tampered
+    $manifest=[Text.Encoding]::UTF8.GetString($forged.State.Items[$manifestKey].bytes)|ConvertFrom-Json -DateKind String
+    $manifest.html.sha256=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($tampered))
+    $manifestBytes=[Text.Encoding]::UTF8.GetBytes(($manifest|ConvertTo-Json -Depth 8 -Compress));$forged.State.Items[$manifestKey].bytes=$manifestBytes
+    $pointer=[Text.Encoding]::UTF8.GetString($forged.State.Items['latest.json'].bytes)|ConvertFrom-Json -DateKind String
+    $pointer.manifest.length=[long]$manifestBytes.Length;$pointer.manifest.sha256=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($manifestBytes))
+    $forged.State.Items['latest.json'].bytes=[Text.Encoding]::UTF8.GetBytes(($pointer|ConvertTo-Json -Depth 8 -Compress))
+    $fixture.State.Before={
+        param($state,$operation,$key)
+        if(-not$state.Transitioned-and(Test-Path "$ReadyPath.advance")){
+            foreach($entry in $forged.State.Items.GetEnumerator()){$state.Items[$entry.Key]=$entry.Value};$state.Transitioned=$true
+        }
+    }.GetNewClosure()
+}
 elseif ($Case -eq 'switchSnapshot') {
+    $new = New-MaesterViewerQualifiedTestReport $templateBytes '{"Name":"new-snapshot","EndOfJson":"EndOfJson"}'
     $newer = New-FixtureStore
-    $null = Publish-MaesterViewerProjection -HtmlBytes $new -TenantId $tenant -Environment $environment -RunId $run2 -RunStartedAtUtc $now.AddMinutes(-1) -Store $newer.Store
+    $null = Publish-MaesterViewerProjection -HtmlBytes $new -TemplateBytes $templateBytes -TenantId $tenant -Environment $environment -RunId $run2 -RunStartedAtUtc $now.AddMinutes(-1) -Store $newer.Store
     $fixture.State.Before = {
         param($state, $operation, $key)
         if ($operation -eq 'Get' -and $key -eq 'latest.json') {
@@ -144,7 +165,7 @@ $wrappedStore = {
 try {
     $poll = if ($Case -eq 'slowClient') { [TimeSpan]::FromSeconds(30) } else { [TimeSpan]::FromMilliseconds(150) }
     $concurrent = if ($Case -eq 'slowClient') { 1 } else { 8 }
-    Start-MaesterViewerWorker -TenantId $tenant -Environment $environment -Store $wrappedStore -Port $Port `
+    Start-MaesterViewerWorker -TenantId $tenant -Environment $environment -TemplateBytes $templateBytes -Store $wrappedStore -Port $Port `
         -PollInterval $poll -MaximumReportAge ([TimeSpan]::FromMinutes(10)) `
         -ClientWriteTimeout ([TimeSpan]::FromSeconds(1)) -MaximumConcurrentRequests $concurrent -CancellationToken $cts.Token
 }
