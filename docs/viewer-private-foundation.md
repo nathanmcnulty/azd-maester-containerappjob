@@ -39,3 +39,7 @@ The focused tests compile with Bicep 0.46.1 using typed stable 2025-07-01 Contai
 Apps APIs and inspect the exact resource, argument, identity and role graph.
 Input-guard assertions are source/compiled-contract checks; native ARM rejection
 of invalid parameters and deployment behavior remain untested in this phase.
+
+The separate [staged authentication module](viewer-authentication.md) defines
+the later Entra group policy. It also remains unreferenced and requires the app
+to stay private while authentication is configured and read back.
