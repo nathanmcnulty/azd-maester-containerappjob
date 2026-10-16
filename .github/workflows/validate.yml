@@ -40,7 +40,7 @@ jobs:
             throw "Expected 64-bit PowerShell 7.6.6; observed $($PSVersionTable.PSVersion)."
           }
       - name: Install test dependencies
-        run: Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force
+        run: Install-Module Pester -RequiredVersion 6.2.0 -Scope CurrentUser -Force
       - name: Prepare exact Maester viewer template fixture
         shell: bash
         run: |
@@ -65,6 +65,18 @@ jobs:
           tar -xzf "$archive" -C "$runtime" caddy
           chmod +x "$runtime/caddy"
           echo "$runtime" >> "$GITHUB_PATH"
+      - name: Install pinned Bicep validation binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime="$RUNNER_TEMP/bicep-0.46.1"
+          archive="$RUNNER_TEMP/bicep-linux-x64"
+          mkdir "$runtime"
+          curl --fail --location --output "$archive" 'https://github.com/Azure/bicep/releases/download/v0.46.1/bicep-linux-x64'
+          echo "3e011d629ea4311b7a7dd8f0040ab2b1a072ea4ff5d02cb75e0e55a9a6703fb9  $archive" | sha256sum --check
+          chmod +x "$archive"
+          cp "$archive" "$runtime/bicep"
+          echo "BICEP_CLI_PATH=$runtime/bicep" >> "$GITHUB_ENV"
       - name: Run repository tests
         run: Invoke-Pester -Path ./tests -CI
       - name: Validate real Caddy and worker boundary
