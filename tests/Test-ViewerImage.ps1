@@ -75,3 +75,6 @@ http://127.0.0.1:40342 {
   foreach($name in $proxy,$worker,$metadata){$null=Invoke-Docker @('rm','--force',$name) -AllowFailure}
   foreach($name in $proxy,$worker,$metadata){if((Invoke-Docker @('inspect',$name) -AllowFailure).ExitCode-eq 0){throw 'Owned container cleanup failed.'}}
 }
+
+# Expected negative cleanup probes must not become the caller's native exit status.
+$global:LASTEXITCODE=0
