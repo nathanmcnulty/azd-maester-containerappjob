@@ -26,11 +26,16 @@ Describe 'Azure CLI target context' {
 }
 
 Describe 'Selected subscription validation' {
+  BeforeAll {
+    $createdAzStub = -not (Get-Command az -ErrorAction SilentlyContinue)
+    if ($createdAzStub) { function global:az { throw 'Unexpected offline az call' } }
+  }
+  AfterAll { if ($createdAzStub) { Remove-Item function:az } }
   InModuleScope Maester-SetupHelpers {
     BeforeEach {
       Mock az {
         $global:LASTEXITCODE = 0
-        '[{"id":"11111111-1111-1111-1111-111111111111","tenantId":"22222222-2222-2222-2222-222222222222"}]'
+        '{"id":"/subscriptions/11111111-1111-1111-1111-111111111111","subscriptionId":"11111111-1111-1111-1111-111111111111","tenantId":"22222222-2222-2222-2222-222222222222","displayName":"Selected","state":"Enabled"}'
       }
     }
 

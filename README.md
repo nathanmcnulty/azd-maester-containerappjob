@@ -181,3 +181,10 @@ This solution is reasonably secure, but there are additional controls you may ch
 - Azure Container Apps Jobs: https://learn.microsoft.com/azure/container-apps/jobs
 - Azure Container Apps storage: https://learn.microsoft.com/azure/container-apps/storage-mounts
 - App Service custom domain: https://learn.microsoft.com/azure/app-service/app-service-web-tutorial-custom-domain
+
+### Explicit deployment target guards
+
+Direct setup, image-build and job-validation calls require `-TenantId` or
+`AZURE_TENANT_ID` alongside the selected subscription. Fresh ARM metadata must
+confirm the intended tenant and an Enabled subscription before mutations. See
+[the canonical guard adoption and validation boundaries](docs/target-guard-adoption.md).
