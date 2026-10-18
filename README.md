@@ -2,7 +2,7 @@
 
 Deploys a production-style Maester automation solution on Azure with:
 
-- Azure Container App Job (PowerShell 7.4 Mariner container)
+- Azure Container App Job (ACR-built image: PowerShell 7.6.6 / .NET 10 Linux x64)
 - Managed identity + Graph permissions
 - Runner script mounted via Azure Files volume
 - Storage-backed report history (`archive`) and latest pointer (`latest/latest.html`)
@@ -142,8 +142,8 @@ The generated setup summary in `outputs/<env>-setup-summary.md` includes tracked
 ## Runtime behavior
 
 - Weekly schedule (Sunday midnight UTC). To run at a different time or frequency, edit the `cronExpression` in `infra/main.bicep` (e.g. `'30 6 * * 1'` for Monday 6:30 UTC), then re-run `azd provision`.
-- Default image: `mcr.microsoft.com/powershell:lts-mariner-2.0` (modules installed at startup)
-- With `-IncludeACR`: custom image with modules pre-installed (faster startup)
+- Without `IncludeACR`: the existing digest-pinned `mcr.microsoft.com/powershell:lts-mariner-2.0` image remains PowerShell 7.4.7. This legacy path is not qualified for the PowerShell 7.6+ target; its upgrade remains open under MCAJ-002.
+- With `IncludeACR`: the Dockerfile builds PowerShell 7.6.6 / .NET 10 for Linux x64 from a digest-pinned dependency base and a checksum-verified official PowerShell archive, with the locked modules pre-installed. CI builds this image and checks default module imports with networking disabled. Provisioning initially uses the existing public image until postprovision builds and applies the ACR image digest.
 - Runner script is always mounted from Azure Files (never baked into image) for easy updates
 - Outputs:
   - `archive/maester-report-<timestamp>.html.gz`
