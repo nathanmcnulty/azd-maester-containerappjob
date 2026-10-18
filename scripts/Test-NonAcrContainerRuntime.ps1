@@ -72,3 +72,7 @@ finally {
   if ($staging) { Remove-Item -LiteralPath $staging.Path -Recurse -Force }
   Remove-Item -LiteralPath $owned -Recurse -Force
 }
+
+# Expected-failure containers leave a nonzero native exit code behind.
+# Report aggregate success only after every assertion and cleanup has completed.
+exit 0
