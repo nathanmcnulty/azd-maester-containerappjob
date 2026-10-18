@@ -72,3 +72,6 @@ finally {
   if ($staging) { Remove-Item -LiteralPath $staging.Path -Recurse -Force }
   Remove-Item -LiteralPath $owned -Recurse -Force
 }
+# GitHub's pwsh wrapper propagates LASTEXITCODE; negative tests deliberately set it.
+# Reset only after all assertions and owned cleanup have completed successfully.
+$global:LASTEXITCODE = 0

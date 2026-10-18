@@ -70,3 +70,21 @@ Describe 'Production runtime staging and uploads' {
     $infra | Should -Match ([regex]::Escape(([regex]::Match($docker, 'mcr.microsoft.com/[^\s]+')).Value))
   }
 }
+
+Describe 'Hosted runtime harness exit state' {
+  It 'clears the expected negative-test native exit only on successful completion' {
+    $source = Get-Content (Join-Path $repoRoot 'scripts/Test-NonAcrContainerRuntime.ps1') -Raw
+    $source.TrimEnd() | Should -Match '\$global:LASTEXITCODE = 0$'
+    $source.LastIndexOf('$global:LASTEXITCODE = 0') | Should -BeGreaterThan $source.LastIndexOf('Remove-Item -LiteralPath $owned')
+    $success = Join-Path $TestDrive 'success.ps1'
+    $failure = Join-Path $TestDrive 'failure.ps1'
+    $reset = ($source.TrimEnd() -split "`n")[-1]
+    $wrapper = "`nif (Test-Path variable:LASTEXITCODE) { exit `$LASTEXITCODE }"
+    Set-Content $success -Value ("`$ErrorActionPreference = 'Stop'`n& /bin/sh -c 'exit 17'`n" + $reset + $wrapper)
+    & pwsh -NoProfile -File $success
+    $LASTEXITCODE | Should -Be 0
+    Set-Content $failure -Value ("`$ErrorActionPreference = 'Stop'`n& /bin/sh -c 'exit 17'`nthrow 'assertion failed'`n" + $reset + $wrapper)
+    & pwsh -NoProfile -File $failure 2>&1 | Out-Null
+    $LASTEXITCODE | Should -Be 1
+  }
+}
