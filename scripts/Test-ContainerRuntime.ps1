@@ -11,8 +11,8 @@ $lock = Get-Content -LiteralPath $LockPath -Raw | ConvertFrom-Json
 $versions = [ordered]@{}
 foreach ($package in $lock.packages) {
     $manifest = Join-Path $ModuleRoot "$($package.name)/$($package.version)/$($package.name).psd1"
-    $data = Import-PowerShellDataFile -LiteralPath $manifest
-    if ([version]$data.ModuleVersion -ne [version]$package.version) { throw "Module manifest version mismatch: $($package.name)." }
+    $available = @(Get-Module -ListAvailable -Name $manifest -ErrorAction Stop)
+    if ($available.Count -ne 1 -or $available[0].Version -ne [version]$package.version) { throw "Module manifest version mismatch: $($package.name)." }
 }
 foreach ($name in @('Az.Accounts','Microsoft.Graph.Authentication','Maester','Pester','DnsClient-PS')) {
     $package = @($lock.packages | Where-Object name -CEQ $name)
