@@ -13,7 +13,7 @@ param location string = resourceGroup().location
 param environmentName string = 'dev'
 
 @description('Container image to use for the Maester job')
-param imageName string = 'mcr.microsoft.com/powershell:lts-mariner-2.0@sha256:77d815b197b36e1f9fa454effa4edd405ce793ad5c16e57489316b9637879951'
+param imageName string = 'mcr.microsoft.com/dotnet/runtime-deps:10.0-noble@sha256:9bc5729cebc4847b28da997c802ab71ce3a2ac42512260c3a151f61132b26f7b'
 
 @description('Optional user-assigned managed identity resource id')
 param userAssignedIdentityResourceId string = ''
@@ -283,9 +283,9 @@ resource containerAppJob 'Microsoft.App/jobs@2024-03-01' = {
           name: 'maester'
           image: imageName
           command: [
-            'pwsh'
-            '-File'
-            '/mnt/scripts/Invoke-MaesterContainerJob.ps1'
+            '/bin/sh'
+            '/mnt/scripts/Start-MaesterContainerJob.sh'
+            includeACR ? 'acr' : 'nonacr'
           ]
           env: [
             {

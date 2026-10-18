@@ -22,13 +22,19 @@ $ErrorActionPreference = 'Stop'
 
 Import-Module (Join-Path $PSScriptRoot 'vendor\Azd.MaesterHooks\Maester-SetupHelpers.psm1') -Force
 
+if (-not $TenantId) { $TenantId = $env:AZURE_TENANT_ID }
+if ([string]::IsNullOrWhiteSpace($TenantId)) { throw 'TenantId is required. Pass -TenantId or set AZURE_TENANT_ID.' }
 $azAccount = Get-AzCliSubscriptionContext -SubscriptionId $SubscriptionId -TenantId $TenantId
-if (-not $TenantId) { $TenantId = $azAccount.tenantId }
+$TenantId = $azAccount.tenantId
 $armToken = az account get-access-token --subscription $SubscriptionId --resource https://management.azure.com/ --query accessToken -o tsv
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($armToken)) { throw 'Failed to acquire the selected subscription management token.' }
 $armHeaders = @{ Authorization = "Bearer $armToken" }
 
 $apiVersion = '2024-03-01'
 $basePath = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.App/jobs/$ContainerAppJobName"
+
+# Revalidate at the mutation boundary after token acquisition.
+$null = Get-AzCliSubscriptionContext -SubscriptionId $SubscriptionId -TenantId $TenantId
 
 # Start the Container App Job execution
 $startPayload = Invoke-RestMethod -Method POST -Uri "https://management.azure.com$basePath/start?api-version=$apiVersion" -Headers $armHeaders -Body '{}' -ContentType 'application/json'

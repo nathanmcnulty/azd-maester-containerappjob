@@ -2,7 +2,7 @@
 
 Deploys a production-style Maester automation solution on Azure with:
 
-- Azure Container App Job (PowerShell 7.4 Mariner container)
+- Azure Container App Job (PowerShell 7.6.6 / .NET 10 Linux x64, with optional ACR)
 - Managed identity + Graph permissions
 - Runner script mounted via Azure Files volume
 - Storage-backed report history (`archive`) and latest pointer (`latest/latest.html`)
@@ -141,9 +141,26 @@ The generated setup summary in `outputs/<env>-setup-summary.md` includes tracked
 
 ## Runtime behavior
 
+Configuration drift is disabled by default in this host. The runner excludes the
+locked Maester drift suite and clears `MAESTER_FOLDER_DRIFT` for ordinary runs,
+restoring its prior process value afterward even on failure. A manual operator
+can opt in with `-EnableApprovedDrift` and the complete explicit input/tenant/run
+binding arguments; the path uses private staging, exact drift/JUnit accounting,
+and staged-input cleanup before the existing private blob publication routes.
+Owned local reports are removed when the enabled run ends. An
+inherited environment variable cannot select unapproved baseline/current files.
+The first opt-in refuses configured mail and Web App destinations because their
+report audience and delivery boundaries remain unqualified. Native scheduled
+enablement, source transport, access, retention, rollback and second-host gates
+remain open under MCAJ-010. See [the qualification evidence](docs/drift-isolation.md).
+
 - Weekly schedule (Sunday midnight UTC). To run at a different time or frequency, edit the `cronExpression` in `infra/main.bicep` (e.g. `'30 6 * * 1'` for Monday 6:30 UTC), then re-run `azd provision`.
-- Default image: `mcr.microsoft.com/powershell:lts-mariner-2.0` (modules installed at startup)
-- With `-IncludeACR`: custom image with modules pre-installed (faster startup)
+- Without `IncludeACR`: the digest-pinned Microsoft .NET 10 Ubuntu Noble dependency image starts `/bin/sh /mnt/scripts/Start-MaesterContainerJob.sh nonacr`. Setup downloads the official PowerShell 7.6.6 Linux x64 archive, checks its pinned SHA-256, and uploads it alongside the runner to the existing Azure Files share. Each job copies and verifies the archive again, extracts into an owned local temporary directory, checks the engine, and invokes the maintained runner. No new registry or Azure resource is needed. The tradeoff is archive storage in the existing share and copy/extraction time at startup; the share's ordinary storage/transaction charges still apply.
+- With `IncludeACR`: the existing Dockerfile builds PowerShell 7.6.6 / .NET 10 from the same pinned dependency base and verified official archive, with locked modules pre-installed. The mounted bootstrap uses explicit `acr` mode and never installs a runtime or falls back. The public provisioning placeholder intentionally cannot execute an assessment: it fails before the runner until postprovision builds and applies the ACR image digest.
+- Missing files, download/hash/extraction/runtime/module failures stop execution. Bootstrap cleanup removes only its owned local temporary directory and leaves mounted source files untouched. Setup similarly removes only its own staging directory. ACR setup does not download or upload the runtime archive.
+- Hosted Linux x64 CI exercises the production non-ACR files and invocation: real runtime/module installation, exact five default imports, a subsequent offline run, corruption failures, ACR placeholder rejection, and source/temporary-file checks. It also builds the normal ACR image and checks its mounted invocation offline. The explicit `-ValidateRuntimeOnly` diagnostic stops after imports, before identity authentication; it does not run an assessment or publish a report.
+- These source/runtime checks do not qualify native Container App identity, report access, rollback, or cleanup. Issue [#26](https://github.com/nathanmcnulty/azd-maester-containerappjob/issues/26) and MCAJ-002 remain open for those separately authorized Azure gates.
+- Runtime provenance: [official PowerShell 7.6.6 release and checksums](https://github.com/PowerShell/PowerShell/releases/tag/v7.6.6). The archive hash and base digest stay aligned with the ACR Dockerfile; tests reject pin drift. Deprecated PowerShell public images and development-only SDK images are not used as the new production default.
 - Runner script is always mounted from Azure Files (never baked into image) for easy updates
 - Outputs:
   - `archive/maester-report-<timestamp>.html.gz`
@@ -177,3 +194,10 @@ This solution is reasonably secure, but there are additional controls you may ch
 - Azure Container Apps Jobs: https://learn.microsoft.com/azure/container-apps/jobs
 - Azure Container Apps storage: https://learn.microsoft.com/azure/container-apps/storage-mounts
 - App Service custom domain: https://learn.microsoft.com/azure/app-service/app-service-web-tutorial-custom-domain
+
+### Explicit deployment target guards
+
+Direct setup, image-build and job-validation calls require `-TenantId` or
+`AZURE_TENANT_ID` alongside the selected subscription. Fresh ARM metadata must
+confirm the intended tenant and an Enabled subscription before mutations. See
+[the canonical guard adoption and validation boundaries](docs/target-guard-adoption.md).
