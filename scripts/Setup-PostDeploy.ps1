@@ -425,7 +425,7 @@ $storageKey = $storageKeysResponse.keys[0].value
 
 $includeACR = ConvertTo-BoolOrDefault -Value $env:INCLUDE_ACR -Default $false
 Import-Module (Join-Path $PSScriptRoot 'Maester-RuntimeFiles.psm1') -Force
-Publish-MaesterRuntimeFiles -StorageAccountName $storageAccountName -StorageKey $storageKey -ProjectRoot $projectRoot -IncludeACR:$includeACR
+Publish-MaesterRuntimeFiles -SubscriptionId $SubscriptionId -TenantId $TenantId -ResourceGroupName $resolvedResourceGroupName -StorageAccountName $storageAccountName -StorageKey $storageKey -ProjectRoot $projectRoot -IncludeACR:$includeACR
 
 Write-Host "Uploaded locked runner files to Azure Files share 'scripts/$storageAccountName'."
 

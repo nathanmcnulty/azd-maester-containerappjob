@@ -1,5 +1,7 @@
 Set-StrictMode -Version Latest
 
+Import-Module (Join-Path $PSScriptRoot 'vendor/Azd.MaesterHooks/Maester-SetupHelpers.psm1')
+
 function New-MaesterRuntimeStaging {
   [CmdletBinding()]
   param(
@@ -35,16 +37,37 @@ function New-MaesterRuntimeStaging {
 function Publish-MaesterRuntimeFiles {
   [CmdletBinding()]
   param(
-    [Parameter(Mandatory)][string]$StorageAccountName,
+    [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$SubscriptionId,
+    [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$TenantId,
+    [Parameter(Mandatory)][ValidatePattern('^[\p{L}\p{N}_().-]{1,90}(?<!\.)$')][string]$ResourceGroupName,
+    [Parameter(Mandatory)][ValidatePattern('^[a-z0-9]{3,24}$')][string]$StorageAccountName,
     [Parameter(Mandatory)][string]$StorageKey,
     [string]$ProjectRoot = (Split-Path $PSScriptRoot -Parent),
     [switch]$IncludeACR
   )
   $ErrorActionPreference = 'Stop'
+  if ([string]::IsNullOrWhiteSpace($TenantId)) { throw 'An explicit expected TenantId is required.' }
+  $context = Get-AzCliSubscriptionContext -SubscriptionId $SubscriptionId -TenantId $TenantId
+  $SubscriptionId = $context.id
+  $TenantId = $context.tenantId
+  $storageId = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.Storage/storageAccounts/$StorageAccountName"
+  $storageJson = & az storage account show --subscription $SubscriptionId --resource-group $ResourceGroupName --name $StorageAccountName --output json 2>$null
+  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($storageJson)) { throw 'Unable to verify the selected storage account.' }
+  try { $storage = $storageJson | ConvertFrom-Json -AsHashtable -ErrorAction Stop }
+  catch { throw 'Invalid storage account ARM metadata.' }
+  if ($storage -isnot [System.Collections.IDictionary] -or
+      [string]$storage.id -ine $storageId -or
+      [string]$storage.name -ine $StorageAccountName -or
+      [string]$storage.type -ine 'Microsoft.Storage/storageAccounts' -or
+      [string]$storage.resourceGroup -ine $ResourceGroupName) {
+    throw 'Storage account ARM identity does not match the selected subscription, resource group and account.'
+  }
   $staging = New-MaesterRuntimeStaging -ProjectRoot $ProjectRoot -IncludeACR:$IncludeACR
   try {
     foreach ($file in $staging.Files) {
-      & az storage file upload --account-name $StorageAccountName --account-key $StorageKey `
+      # Downloads can be long, and subscription state can change between files.
+      Get-AzCliSubscriptionContext -SubscriptionId $SubscriptionId -TenantId $TenantId | Out-Null
+      & az storage file upload --subscription $SubscriptionId --account-name $StorageAccountName --account-key $StorageKey `
         --share-name scripts --source (Join-Path $staging.Path $file) --path $file --no-progress --output none
       if ($LASTEXITCODE -ne 0) { throw "Failed to upload '$file' to Azure Files share 'scripts'." }
     }
