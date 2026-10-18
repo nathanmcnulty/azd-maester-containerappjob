@@ -2,7 +2,7 @@
 
 Deploys a production-style Maester automation solution on Azure with:
 
-- Azure Container App Job (ACR-built image: PowerShell 7.6.6 / .NET 10 Linux x64)
+- Azure Container App Job (PowerShell 7.6.6 / .NET 10 Linux x64, with optional ACR)
 - Managed identity + Graph permissions
 - Runner script mounted via Azure Files volume
 - Storage-backed report history (`archive`) and latest pointer (`latest/latest.html`)
@@ -142,8 +142,12 @@ The generated setup summary in `outputs/<env>-setup-summary.md` includes tracked
 ## Runtime behavior
 
 - Weekly schedule (Sunday midnight UTC). To run at a different time or frequency, edit the `cronExpression` in `infra/main.bicep` (e.g. `'30 6 * * 1'` for Monday 6:30 UTC), then re-run `azd provision`.
-- Without `IncludeACR`: the existing digest-pinned `mcr.microsoft.com/powershell:lts-mariner-2.0` image remains PowerShell 7.4.7. This legacy path is not qualified for the PowerShell 7.6+ target; its upgrade remains open under MCAJ-002.
-- With `IncludeACR`: the Dockerfile builds PowerShell 7.6.6 / .NET 10 for Linux x64 from a digest-pinned dependency base and a checksum-verified official PowerShell archive, with the locked modules pre-installed. CI builds this image and checks default module imports with networking disabled. Provisioning initially uses the existing public image until postprovision builds and applies the ACR image digest.
+- Without `IncludeACR`: the digest-pinned Microsoft .NET 10 Ubuntu Noble dependency image starts `/bin/sh /mnt/scripts/Start-MaesterContainerJob.sh nonacr`. Setup downloads the official PowerShell 7.6.6 Linux x64 archive, checks its pinned SHA-256, and uploads it alongside the runner to the existing Azure Files share. Each job copies and verifies the archive again, extracts into an owned local temporary directory, checks the engine, and invokes the maintained runner. No new registry or Azure resource is needed. The tradeoff is archive storage in the existing share and copy/extraction time at startup; the share's ordinary storage/transaction charges still apply.
+- With `IncludeACR`: the existing Dockerfile builds PowerShell 7.6.6 / .NET 10 from the same pinned dependency base and verified official archive, with locked modules pre-installed. The mounted bootstrap uses explicit `acr` mode and never installs a runtime or falls back. The public provisioning placeholder intentionally cannot execute an assessment: it fails before the runner until postprovision builds and applies the ACR image digest.
+- Missing files, download/hash/extraction/runtime/module failures stop execution. Bootstrap cleanup removes only its owned local temporary directory and leaves mounted source files untouched. Setup similarly removes only its own staging directory. ACR setup does not download or upload the runtime archive.
+- Hosted Linux x64 CI exercises the production non-ACR files and invocation: real runtime/module installation, exact five default imports, a subsequent offline run, corruption failures, ACR placeholder rejection, and source/temporary-file checks. It also builds the normal ACR image and checks its mounted invocation offline. The explicit `-ValidateRuntimeOnly` diagnostic stops after imports, before identity authentication; it does not run an assessment or publish a report.
+- These source/runtime checks do not qualify native Container App identity, report access, rollback, or cleanup. Issue [#26](https://github.com/nathanmcnulty/azd-maester-containerappjob/issues/26) and MCAJ-002 remain open for those separately authorized Azure gates.
+- Runtime provenance: [official PowerShell 7.6.6 release and checksums](https://github.com/PowerShell/PowerShell/releases/tag/v7.6.6). The archive hash and base digest stay aligned with the ACR Dockerfile; tests reject pin drift. Deprecated PowerShell public images and development-only SDK images are not used as the new production default.
 - Runner script is always mounted from Azure Files (never baked into image) for easy updates
 - Outputs:
   - `archive/maester-report-<timestamp>.html.gz`

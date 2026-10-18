@@ -1,4 +1,13 @@
-﻿# Invoke-MaesterContainerJob.ps1
+#Requires -Version 7.6
+[CmdletBinding()]
+param([switch]$ValidateRuntimeOnly)
+
+# Defense in depth for direct invocation, before modules or Azure authentication.
+if (-not $IsLinux -or [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture -ne 'X64' -or [Environment]::Version.Major -ne 10) {
+  throw 'The Maester runner requires PowerShell 7.6+ / .NET 10 on Linux x64.'
+}
+
+# Invoke-MaesterContainerJob.ps1
 # Runner script for the Container App Job. Mounted via Azure Files volume.
 # Reads configuration from environment variables set on the Container App Job.
 
@@ -149,7 +158,11 @@ foreach ($moduleName in $requiredModules) {
 }
 if ($missing.Count -gt 0) {
   $userModuleRoot = Join-Path $HOME '.local/share/powershell/Modules'
-  & $installerPath -LockPath $lockPath -DestinationRoot $userModuleRoot
+  try {
+    & $installerPath -LockPath $lockPath -DestinationRoot $userModuleRoot -ErrorAction Stop
+    if (-not $?) { throw 'Locked module installation failed.' }
+  }
+  catch { throw "Locked module installation failed: $($_.Exception.Message)" }
 }
 foreach ($moduleName in $requiredModules) {
   if (-not @(Get-Module -ListAvailable -Name $moduleName | Where-Object { $_.Version -eq [version]$moduleVersions[$moduleName] }).Count) {
@@ -163,6 +176,17 @@ foreach ($moduleName in $requiredModules) {
 
 foreach ($moduleName in $requiredModules) {
   Import-Module $moduleName -RequiredVersion $moduleVersions[$moduleName] -Force -ErrorAction Stop
+}
+
+if ($ValidateRuntimeOnly) {
+  $versions = [ordered]@{}
+  foreach ($name in $requiredModules) {
+    $loaded = @(Get-Module -Name $name)
+    if ($loaded.Count -ne 1 -or $loaded[0].Version -ne [version]$moduleVersions[$name]) { throw "Exact module import failed: $name." }
+    $versions[$name] = $loaded[0].Version.ToString()
+  }
+  [ordered]@{ validation = 'runtime-only'; powerShell = $PSVersionTable.PSVersion.ToString(); dotnet = [Environment]::Version.ToString(); architecture = 'X64'; modules = $versions } | ConvertTo-Json -Depth 5
+  return
 }
 
 Connect-AzAccount -Identity -ErrorAction Stop | Out-Null

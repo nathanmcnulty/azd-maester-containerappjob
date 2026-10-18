@@ -6,6 +6,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+env:
+  POWERSHELL_TELEMETRY_OPTOUT: 1
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+
 permissions:
   contents: read
 
@@ -30,6 +34,9 @@ jobs:
         run: |
           Import-Module Pester -RequiredVersion 6.2.0 -Force
           Invoke-Pester -Path ./tests -CI
+      - name: Exercise bootstrap failure boundaries
+        shell: bash
+        run: python3 -m unittest discover -s tests -p 'test_*.py'
       - name: Parse PowerShell
         run: |
           $errors = @()
@@ -49,6 +56,26 @@ jobs:
         run: docker build --platform linux/amd64 --tag maester-runtime:validation .
       - name: Verify the image runtime and locked modules
         run: >-
-          docker run --rm --network none
+          docker run --rm --network none --env POWERSHELL_TELEMETRY_OPTOUT=1 --env DOTNET_CLI_TELEMETRY_OPTOUT=1
           --mount type=bind,source="${{ github.workspace }}/scripts/Test-ContainerRuntime.ps1",target=/tmp/Test-ContainerRuntime.ps1,readonly
           maester-runtime:validation pwsh -NoLogo -NoProfile -File /tmp/Test-ContainerRuntime.ps1
+
+      - name: Verify the mounted ACR production invocation offline
+        shell: pwsh
+        run: |
+          Import-Module ./scripts/Maester-RuntimeFiles.psm1
+          $staging = New-MaesterRuntimeStaging -IncludeACR
+          try {
+            docker run --rm --network none --env POWERSHELL_TELEMETRY_OPTOUT=1 --env DOTNET_CLI_TELEMETRY_OPTOUT=1 --mount "type=bind,source=$($staging.Path),target=/mnt/scripts,readonly" maester-runtime:validation /bin/sh /mnt/scripts/Start-MaesterContainerJob.sh acr -ValidateRuntimeOnly
+            if ($LASTEXITCODE -ne 0) { throw 'Mounted ACR runtime validation failed.' }
+          }
+          finally { Remove-Item -LiteralPath $staging.Path -Recurse -Force }
+
+  nonacr-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Run the production non-ACR bootstrap and locked imports
+        shell: pwsh
+        run: ./scripts/Test-NonAcrContainerRuntime.ps1
