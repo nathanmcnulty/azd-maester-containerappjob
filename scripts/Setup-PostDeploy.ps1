@@ -422,19 +422,9 @@ $storageKeyPath = "/subscriptions/$SubscriptionId/resourceGroups/$resolvedResour
 $storageKeysResponse = Invoke-RestMethod -Method POST -Uri "https://management.azure.com$storageKeyPath" -Headers $armHeaders -Body '{}' -ContentType 'application/json'
 $storageKey = $storageKeysResponse.keys[0].value
 
-foreach ($file in @('Invoke-MaesterContainerJob.ps1', 'Install-LockedModules.ps1', 'runtime-packages.lock.json')) {
-  $sourcePath = if ($file -like '*.json') { Join-Path (Split-Path $PSScriptRoot -Parent) $file } else { Join-Path $PSScriptRoot $file }
-  if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) { throw "Required runner file was not found: $sourcePath" }
-  & az storage file upload `
-    --account-name $storageAccountName `
-    --account-key $storageKey `
-    --share-name 'scripts' `
-    --source $sourcePath `
-    --path $file `
-    --no-progress `
-    --output none
-  if ($LASTEXITCODE -ne 0) { throw "Failed to upload '$file' to Azure Files share 'scripts'." }
-}
+$includeACR = ConvertTo-BoolOrDefault -Value $env:INCLUDE_ACR -Default $false
+Import-Module (Join-Path $PSScriptRoot 'Maester-RuntimeFiles.psm1') -Force
+Publish-MaesterRuntimeFiles -StorageAccountName $storageAccountName -StorageKey $storageKey -ProjectRoot $projectRoot -IncludeACR:$includeACR
 
 Write-Host "Uploaded locked runner files to Azure Files share 'scripts/$storageAccountName'."
 

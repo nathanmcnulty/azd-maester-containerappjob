@@ -1,6 +1,8 @@
 # Container Apps Jobs use Linux x64; install the exact stable PowerShell release.
 FROM mcr.microsoft.com/dotnet/runtime-deps:10.0-noble@sha256:9bc5729cebc4847b28da997c802ab71ce3a2ac42512260c3a151f61132b26f7b
 
+ENV POWERSHELL_TELEMETRY_OPTOUT=1 DOTNET_CLI_TELEMETRY_OPTOUT=1
+
 RUN test "$(uname -m)" = "x86_64" \
     && apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates \
