@@ -60,3 +60,21 @@ No Azure login, token acquisition, grants, live resource writes, release or merg
 was performed to implement this change. Native sub-mvp runtime, managed identity,
 publication/access/retention/rollback and owned resource cleanup remain separate
 owner-run validation gates. Offline/CI success does not close them.
+
+## Direct runtime publication (issue #38)
+
+`Publish-MaesterRuntimeFiles` also requires explicit `SubscriptionId`, `TenantId`
+and `ResourceGroupName`. Before staging or downloading it uses the same pinned
+canonical subscription guard and resolves the storage account with an explicitly
+subscription-scoped ARM lookup. The returned account ID, name, type and resource
+group must match the requested target. Setup passes its validated selectors to
+this actual publisher.
+
+Every Azure Files upload repeats the fresh canonical tenant/Enabled check and
+carries `--subscription`, in addition to the existing account/key binding. A
+subscription disabled during download produces no uploads; disabling it after
+one upload stops subsequent files. Already uploaded files are not rolled back.
+Archive SHA-256 verification and owned staging cleanup remain unchanged. The
+registered offline tests execute both the publisher and the real Setup call path
+with fail-closed transport doubles; native runtime and cleanup gates above remain
+owner-run work.
