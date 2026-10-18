@@ -1,5 +1,6 @@
 Describe 'Maester ACR image target' {
   BeforeAll {
+    Import-Module (Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts/vendor/Azd.MaesterHooks/Maester-SetupHelpers.psm1') -Force
     $buildScript = Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts/Build-MaesterImage.ps1'
     $subscriptionId = '11111111-1111-1111-1111-111111111111'
     $resourceGroupName = 'rg-maester-test'
@@ -7,6 +8,11 @@ Describe 'Maester ACR image target' {
   }
 
   BeforeEach {
+    Mock Import-Module {} -ParameterFilter { $Name -like '*Maester-SetupHelpers.psm1' }
+    Mock az -ModuleName Maester-SetupHelpers {
+      $global:LASTEXITCODE = 0
+      '{"id":"/subscriptions/11111111-1111-1111-1111-111111111111","subscriptionId":"11111111-1111-1111-1111-111111111111","tenantId":"22222222-2222-2222-2222-222222222222","displayName":"Selected","state":"Enabled"}'
+    }
     $global:maesterBuildCalls = 0
     $global:maesterDigest = 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
     $global:maesterAcrListResponse = '[{"name":"crmaestertest","loginServer":"crmaestertest.azurecr.io","tags":{"environment":"verylongenvironment","managedBy":"azd","workload":"maester","solution":"container-app-job"}}]'
@@ -50,7 +56,7 @@ Describe 'Maester ACR image target' {
       }
     }
 
-    & $buildScript -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName `
+    & $buildScript -SubscriptionId $subscriptionId -TenantId '22222222-2222-2222-2222-222222222222' -ResourceGroupName $resourceGroupName `
       -EnvironmentName 'verylongenvironment' -ContainerAppJobName $deployedJobName `
       -AcrName 'crmaestertest'
 
@@ -76,7 +82,7 @@ Describe 'Maester ACR image target' {
         }
       }
     }
-    { & $buildScript -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -EnvironmentName 'verylongenvironment' -ContainerAppJobName $deployedJobName -AcrName 'crmaestertest' } |
+    { & $buildScript -SubscriptionId $subscriptionId -TenantId '22222222-2222-2222-2222-222222222222' -ResourceGroupName $resourceGroupName -EnvironmentName 'verylongenvironment' -ContainerAppJobName $deployedJobName -AcrName 'crmaestertest' } |
       Should -Throw '*did not return a valid digest*'
     Should -Invoke Invoke-RestMethod -Times 0 -ParameterFilter { $Method -eq 'PUT' }
   }
@@ -100,7 +106,7 @@ Describe 'Maester ACR image target' {
       }
     }
 
-    & $buildScript -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName `
+    & $buildScript -SubscriptionId $subscriptionId -TenantId '22222222-2222-2222-2222-222222222222' -ResourceGroupName $resourceGroupName `
       -EnvironmentName 'verylongenvironment'
 
     Should -Invoke Invoke-RestMethod -Times 1 -Exactly -ParameterFilter {
@@ -113,7 +119,7 @@ Describe 'Maester ACR image target' {
     Mock Invoke-RestMethod { throw 'not found' }
 
     {
-      & $buildScript -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName `
+      & $buildScript -SubscriptionId $subscriptionId -TenantId '22222222-2222-2222-2222-222222222222' -ResourceGroupName $resourceGroupName `
         -EnvironmentName 'verylongenvironment' -ContainerAppJobName $deployedJobName
     } | Should -Throw "*Failed to read Container App Job '$deployedJobName'*"
     $global:maesterBuildCalls | Should -Be 0
@@ -127,7 +133,7 @@ Describe 'Maester ACR image target' {
     }
 
     {
-      & $buildScript -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName `
+      & $buildScript -SubscriptionId $subscriptionId -TenantId '22222222-2222-2222-2222-222222222222' -ResourceGroupName $resourceGroupName `
         -EnvironmentName 'verylongenvironment'
     } | Should -Throw '*Could not identify one Maester Container App Job*'
     $global:maesterBuildCalls | Should -Be 0
@@ -143,7 +149,7 @@ Describe 'Maester ACR image target' {
     }
 
     {
-      & $buildScript -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName `
+      & $buildScript -SubscriptionId $subscriptionId -TenantId '22222222-2222-2222-2222-222222222222' -ResourceGroupName $resourceGroupName `
         -EnvironmentName 'verylongenvironment'
     } | Should -Throw '*Could not identify one Maester Container App Job*'
     $global:maesterBuildCalls | Should -Be 0
@@ -159,7 +165,7 @@ Describe 'Maester ACR image target' {
     }
 
     {
-      & $buildScript -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName `
+      & $buildScript -SubscriptionId $subscriptionId -TenantId '22222222-2222-2222-2222-222222222222' -ResourceGroupName $resourceGroupName `
         -EnvironmentName 'verylongenvironment'
     } | Should -Throw '*Container App Job list is incomplete*'
     $global:maesterBuildCalls | Should -Be 0
@@ -171,7 +177,7 @@ Describe 'Maester ACR image target' {
     Mock Invoke-RestMethod { throw 'Unexpected ARM request' }
 
     {
-      & $buildScript -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName `
+      & $buildScript -SubscriptionId $subscriptionId -TenantId '22222222-2222-2222-2222-222222222222' -ResourceGroupName $resourceGroupName `
         -EnvironmentName 'verylongenvironment' -ContainerAppJobName $deployedJobName
     } | Should -Throw '*Could not identify one Maester Azure Container Registry*'
     $global:maesterBuildCalls | Should -Be 0
@@ -183,7 +189,7 @@ Describe 'Maester ACR image target' {
     Mock Invoke-RestMethod { throw 'Unexpected ARM request' }
 
     {
-      & $buildScript -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName `
+      & $buildScript -SubscriptionId $subscriptionId -TenantId '22222222-2222-2222-2222-222222222222' -ResourceGroupName $resourceGroupName `
         -EnvironmentName 'verylongenvironment' -ContainerAppJobName $deployedJobName
     } | Should -Throw '*Could not identify one Maester Azure Container Registry*'
     $global:maesterBuildCalls | Should -Be 0
@@ -194,7 +200,7 @@ Describe 'Maester ACR image target' {
     Mock Invoke-RestMethod { throw 'Unexpected ARM request' }
 
     {
-      & $buildScript -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName `
+      & $buildScript -SubscriptionId $subscriptionId -TenantId '22222222-2222-2222-2222-222222222222' -ResourceGroupName $resourceGroupName `
         -EnvironmentName 'verylongenvironment' -ContainerAppJobName $deployedJobName `
         -AcrName 'missingregistry'
     } | Should -Throw '*Could not identify one Maester Azure Container Registry*'

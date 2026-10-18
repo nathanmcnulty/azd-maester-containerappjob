@@ -59,8 +59,9 @@ if (-not $TenantId -and $env:AZURE_TENANT_ID) {
   $TenantId = $env:AZURE_TENANT_ID
 }
 
+if ([string]::IsNullOrWhiteSpace($TenantId)) { throw 'TenantId is required. Pass -TenantId or set AZURE_TENANT_ID.' }
 $azAccount = Get-AzCliSubscriptionContext -SubscriptionId $SubscriptionId -TenantId $TenantId
-if (-not $TenantId) { $TenantId = $azAccount.tenantId }
+$TenantId = $azAccount.tenantId
 $armToken = az account get-access-token --subscription $SubscriptionId --resource https://management.azure.com/ --query accessToken -o tsv
 $armHeaders = @{ Authorization = "Bearer $armToken" }
 if (-not $EnvironmentName) {
@@ -303,7 +304,7 @@ if ($IncludeExchange -and $exchangeSetupStatus -eq 'pending') {
       Write-Verbose "Could not resolve tenant initial domain: $($_.Exception.Message)"
     }
 
-    Connect-ExchangeOnlineSilent -Organization $exoOrganization
+    Connect-ExchangeOnlineSilent -Organization $exoOrganization -TenantId $TenantId
 
     try {
       New-ServicePrincipal -AppId $miSp.appId -ObjectId $principalId -DisplayName $miSp.displayName | Out-Null
@@ -436,6 +437,7 @@ $includeACR = ConvertTo-BoolOrDefault -Value $env:INCLUDE_ACR -Default $false
 if ($includeACR) {
   & "$PSScriptRoot\Build-MaesterImage.ps1" `
     -SubscriptionId $SubscriptionId `
+    -TenantId $TenantId `
     -ResourceGroupName $resolvedResourceGroupName `
     -EnvironmentName $EnvironmentName `
     -ContainerAppJobName $containerAppJobName `

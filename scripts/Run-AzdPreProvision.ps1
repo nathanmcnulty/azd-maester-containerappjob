@@ -12,6 +12,9 @@ $ErrorActionPreference = 'Stop'
 
 Import-Module (Join-Path $PSScriptRoot 'vendor\Azd.MaesterHooks\Maester-PreProvision.psm1') -Force
 
+if (-not $TenantId) { $TenantId = $env:AZURE_TENANT_ID }
+if ([string]::IsNullOrWhiteSpace($TenantId)) { throw 'TenantId is required. Pass -TenantId or set AZURE_TENANT_ID.' }
+
 Invoke-MaesterPreProvision `
   -SolutionName 'container-app-job' `
   -SubscriptionId $SubscriptionId `
