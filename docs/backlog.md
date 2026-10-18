@@ -289,11 +289,14 @@ Review MCAJ-003 against the current repository state. Its status or authorizatio
 
 - **Kind:** verification
 - **Priority:** P1
-- **Status:** proposed
+- **Status:** in-progress
 - **Wave:** 2
 - **Authorization:** azure-deployment
 - **Blocker:** _none_
-- **Claim:** _none_
+- **Claim owner:** Codex
+- **Claim worktree:** codex/container-runtime-image-20261018
+- **Claim base revision:** `1f34605d23e4f0536c9215d21f6368d98f5c30f4`
+- **Claim started:** 10/18/2026 06&colon;31&colon;59
 
 **Problem:**
 
@@ -333,7 +336,9 @@ Shared pilots are already vendored; host-specific execution and report access st
 
 **Evidence:**
 
-- _none_
+- Runtime-image prerequisite&colon; origin/main 1f34605d23e4f0536c9215d21f6368d98f5c30f4 pins the production Dockerfile to a PowerShell 7.4.7/.NET 8 image. Replace it with a digest-pinned Linux x64 .NET 10 dependency base and the SHA-256-verified official stable PowerShell 7.6.6 archive; retain every existing locked module version/hash.
+- Add hosted production-image build and offline Linux x64 smoke validation of all locked manifests and the five default module imports, with Pester 6.2.0 and PowerShell 7.6+ in repository CI. Local Docker is unavailable; native image build/import evidence must come from the hosted job. No Azure, Graph, assessment, report or audience claim follows from these source checks.
+- The non-ACR path still uses the legacy PowerShell 7.4.7 public image and is not qualified for the 7.6+ target. The ACR-built image upgrade does not resolve that path, live assessment, identity permissions, report access or resource lifecycle gates.
 
 **Review and authorization note:**
 
