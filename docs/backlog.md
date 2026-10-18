@@ -5,9 +5,9 @@
 
 - **Schema version:** 1.0.0
 - **Repository:** nathanmcnulty/azd-maester-containerappjob
-- **Source revision:** `c29019a489ea76d34181ac6f4479db1715f090f3`
-- **Captured:** 2026-10-07
-- **Items:** 8
+- **Source revision:** `f9be3b35fd6b85f9221d4731b7a79c0407c17c33`
+- **Captured:** 2026-10-16
+- **Items:** 10
 
 ## MCAJ-001: Reconcile this backlog with current source and active work
 
@@ -296,7 +296,7 @@ Review MCAJ-003 against the current repository state. Its status or authorizatio
 - **Claim owner:** Codex
 - **Claim worktree:** codex/container-runtime-image-20261018
 - **Claim base revision:** `1f34605d23e4f0536c9215d21f6368d98f5c30f4`
-- **Claim started:** 10/18/2026 06&colon;31&colon;59
+- **Claim started:** 2026-10-18T06&colon;31&colon;59.7218485Z
 
 **Problem:**
 
@@ -343,6 +343,60 @@ Shared pilots are already vendored; host-specific execution and report access st
 **Review and authorization note:**
 
 Review MCAJ-002 against the current repository state. Its status or authorization class is not eligible for an actionable generated handoff. Do not claim or execute it without explicit selection, satisfied dependencies, and every required authorization. Never interpret this generated view as approval.
+
+## MCAJ-009: Keep configuration drift disabled and isolated by default
+
+- **Kind:** maintenance
+- **Priority:** P1
+- **Status:** done
+- **Wave:** 3
+- **Authorization:** local-only
+- **Blocker:** _none_
+- **Claim:** _none_
+
+**Problem:**
+
+Omitting DriftRoot leaves upstream Maester able to discover unapproved input from an inherited process environment variable.
+
+**Scope:**
+
+- scripts/Invoke-MaesterContainerJob.ps1
+- tests/DriftIsolation.Tests.ps1
+- .github/workflows/validate.yml
+- docs/drift-isolation.md
+
+**Acceptance:**
+
+- Exclude the locked upstream drift file before Pester discovery and clear its ambient environment during invocation, restoring prior process state on success and failure.
+- Preserve ordinary assessment, genuine findings, publication and failure semantics; do not enable drift, fetch data or add permissions.
+- Prove the original inherited-input defect and corrected isolation with exact production configuration/invocation tests plus actual locked suite/report qualification.
+
+**Validation:**
+
+- PowerShell 7.6+ and Pester 6.2&colon; Invoke-Pester ./tests -CI
+- Parse all PowerShell; canonical backlog schema/render checks; fixtures are not native job or publisher proof.
+
+**Dependencies:**
+
+- _none_
+
+**Components:**
+
+- _none_
+
+**Sources:**
+
+- docs/drift-isolation.md
+- https&colon;//github.com/nathanmcnulty/azd-maester/blob/a6e301310ccae0519288b794eb95aae3af43fa08/docs/drift-analysis-design.md
+
+**Evidence:**
+
+- Actual Maester 2.2.0/Pester 6.2 invocation discovered 44 tests again when DriftRoot was omitted in a reused process. Controlled regression tests failed against original source for inherited-root success/failure and pre-discovery exclusion, then passed with isolation. An actual upstream-suite copy plus ordinary synthetic test using the production blocks executed exactly one ordinary test, restored the inherited root and recorded no HTTP/authentication tripwire attempts. See docs/drift-isolation.md; no deployed-job, identity, Blob or recipient proof is claimed.
+- Full repository validation passed 72/72 on PowerShell 7.6.6/Pester 6.2.0. Parser and differential analyzer checks found no new issue; permission/backlog schemas and rendered backlog parity passed. Azure resources, identities, permissions and assignments were not mutated.
+
+**Review and authorization note:**
+
+Review MCAJ-009 against the current repository state. Its status or authorization class is not eligible for an actionable generated handoff. Do not claim or execute it without explicit selection, satisfied dependencies, and every required authorization. Never interpret this generated view as approval.
 
 ## MCAJ-007: Implement optional Caddy Container App report viewer
 
@@ -451,3 +505,75 @@ The shared viewer design is complete, but this standalone Container App Job runn
 **Review and authorization note:**
 
 Review MCAJ-008 against the current repository state. Its status or authorization class is not eligible for an actionable generated handoff. Do not claim or execute it without explicit selection, satisfied dependencies, and every required authorization. Never interpret this generated view as approval.
+
+## MCAJ-010: Implement approved data-only configuration drift inputs
+
+- **Kind:** feature
+- **Priority:** P2
+- **Status:** in-progress
+- **Wave:** 4
+- **Authorization:** local-only
+- **Blocker:** _none_
+- **Claim owner:** codex/root
+- **Claim worktree:** C&colon;/azd-reconciliation-20261016/container-drift-inputs
+- **Claim base revision:** `f8510a3d27cdb328999531c7f2d6bc783413a5fa`
+- **Claim started:** 2026-10-16T13&colon;58&colon;16.3472505+00&colon;00
+
+**Problem:**
+
+Upstream drift comparison exists, but this host has no approved artifact/target/privacy contract or live qualification.
+
+**Scope:**
+
+- scripts/Invoke-MaesterContainerJob.ps1
+- tests/
+- docs/
+- azd-permissions.json
+- scripts/Maester.DriftInputs.psm1
+- docs/drift-input-contract.md
+- scripts/Maester.DriftRun.psm1
+- scripts/Setup-PostDeploy.ps1
+- README.md
+
+**Acceptance:**
+
+- Follow the reviewed MCAT-011 design&colon; explicitly enabled data-only artifacts, immutable approved baseline, tenant/environment/run/source/hash/freshness binding, bounded JSON/path/link/duplicate validation and reviewed schemas, normalization and exclusions.
+- Use the actual locked upstream suite with expected positive case counts and fail on missing suite, zero cases, malformed/scalar/settings inputs, comparison errors and container failures; preserve default-off isolation and reused-process environment restoration.
+- Inspect actual HTML/JSON/Markdown/logs for planted sensitive values; preserve separate comparison, report and publication outcomes and rollback. Add no automatic capture, baseline update or remediation.
+- Independently review the adapter and qualify authorized native job execution, report access, rollback and exact owned cleanup; coordinate a second host before shared extraction.
+
+**Validation:**
+
+- PowerShell 7.6+/Pester 6.2 registered tests and actual locked suite/report fixtures.
+- Separate authorized native host/report/access/cleanup qualification; local metadata grants no live authority.
+
+**Dependencies:**
+
+- MCAJ-009
+
+**Components:**
+
+- _none_
+
+**Sources:**
+
+- docs/drift-isolation.md
+- https&colon;//github.com/nathanmcnulty/azd-maester/blob/a6e301310ccae0519288b794eb95aae3af43fa08/docs/drift-analysis-design.md
+- https&colon;//github.com/nathanmcnulty/azd-maester/issues/2
+
+**Evidence:**
+
+- 2026-10-16 input-boundary implementation&colon; scripts/Maester.DriftInputs.psm1 requires an independently supplied baseline-manifest digest, exact selected tenant/environment/run/producer, immutable revisions, freshness and declared normalization. Closed reference-free schemas, case/file parity, bounded streaming reads, strict UTF-8/JSON duplicate/depth/object checks and byte hashes precede private verified-byte staging. No host hook, suite enablement, collector, baseline approval or permission change is added.
+- PowerShell 7.6.6/Pester 6.2.0 registered tests pass 112/112, including 40 input-boundary cases. Actual locked Maester 2.2.0 drift-suite qualification consumes two prepared synthetic cases and produces eight checks&colon; seven passes and one intentional drift failure, with no HTTP/authentication tripwire attempt. HTML/JSON/Markdown include the synthetic changed value; this helper does not redact approved data. Native runtime, origin/approval authentication, complete host invocation/discovery accounting, report access, rollback, successful-copy lifecycle cleanup and independently qualified second host remain open.
+- The failed private harness attempts are retained separately&colon; initial file-path selection was refused by Invoke-Maester, and an exact restoration assertion exposed PowerShell null-to-empty conversion in a harness setter. The corrected local harness restores an absent environment variable using NullString.Value. Source helper preparation itself does not change the process drift variable. See docs/drift-input-contract.md for the remaining integration contract.
+- Before publication, root fault injection reproduced a staging-name collision deleting a pre-existing private directory. The repaired error path requires successful creation ownership before cleanup; the collision regression preserves the unrelated sentinel. The earlier candidate/review and failing reproduction are retained privately.
+- Fresh independent security review blocked the candidate for PowerShell boolean/number header coercion, hidden partial-stage deletion failure and trailing-separator overlap. The repaired boundary requires string headers and ordinal binding, canonicalizes ending separators, uses absolute regex ends, rejects padded GUIDs, and reports cleanup failure with only a safe code plus the owned private path in exception data. New regressions cover every current header, baseline header types, culture-equivalent text, path orientations, partial writes, deletion refusal and newline suffixes; no candidate was committed or pushed before review repairs.
+- A further independent review reproduced visually deceptive culture-equivalent schema keyword names being admitted by PowerShell membership comparisons while ignored by the JSON validator. Final grammar membership uses ordinal matching for schema keywords/types/required names and manifest fields, with full-helper fake enum/required regressions. This remains a pre-publication source repair, not deployed acceptance.
+- 2026-10-16 manual CLI integration&colon; explicit -EnableApprovedDrift plus independent target/run/producer/approval-digest arguments; connected Az/Graph tenant binding; locked-suite SHA check; exact four results per prepared case, including suite-file binding; private supported JUnit discovery/container/setup-error gate; ordinary assessment findings preserved. Mail and Web App destinations are refused for enabled runs; no schedule/Bicep/environment enablement or input acquisition is added. Setup uploads only the two helper code modules.
+- Current source passes 136/136 registered PowerShell 7.6.6/Pester 6.2.0 tests, including 24 runner-boundary cases. Actual locked Maester 2.2.0 and bundled drift suite run through the production invocation block with two synthetic drift cases and one ordinary synthetic finding in absent, empty and inherited process-state scenarios. Each run yields 9 checks, 7 passes, 2 intentional findings, 0 errors; the original inputs and exact ambient state are preserved, the stage and owned private run are removed, and no HTTP/authentication tripwire fires. HTML/JSON/Markdown contain the synthetic changed value. This is not complete runner bootstrap, native execution, identity, external publication, live audience/retention, rollback, transport or second-host proof.
+- Actual suite qualification caught PowerShell XML property adaptation treating the JUnit name attribute as the element name. The parser now uses the CLR element-name getter; regression fixtures include the real name attribute. One outer runner finally handles all post-allocation exits and reports cleanup refusal with a safe code and private recovery path.
+- Independent runner review required three repairs before commit&colon; enabled runs now require a durable storage destination before authentication, private run allocation uses the native exclusive Directory.CreateTempSubdirectory primitive and exact returned parent/leaf cleanup binding, and simultaneous publication/setup plus cleanup failures retain both outcomes privately. Regressions verify distinct allocated roots, unrelated sentinel preservation, storage refusal, and primary-error recovery. No native enablement or resource mutation occurred. A further review moved every post-allocation step inside recovery; a fault at the first path normalization now removes the exact fresh directory and retains the original setup exception privately.
+
+**Review and authorization note:**
+
+Review MCAJ-010 against the current repository state. Its status or authorization class is not eligible for an actionable generated handoff. Do not claim or execute it without explicit selection, satisfied dependencies, and every required authorization. Never interpret this generated view as approval.
