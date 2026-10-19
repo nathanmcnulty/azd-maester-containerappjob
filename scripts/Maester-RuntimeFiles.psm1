@@ -12,7 +12,7 @@ function New-MaesterRuntimeStaging {
   $directory = Join-Path ([IO.Path]::GetTempPath()) ('maester-upload-' + [guid]::NewGuid().ToString('N'))
   New-Item -ItemType Directory -Path $directory | Out-Null
   try {
-    $files = @('Invoke-MaesterContainerJob.ps1', 'Maester.DriftInputs.psm1', 'Maester.DriftRun.psm1', 'Install-LockedModules.ps1', 'Start-MaesterContainerJob.sh', 'runtime-packages.lock.json')
+    $files = @('Invoke-MaesterContainerJob.ps1', 'Maester.AssessmentEvidence.psm1', 'Maester.DriftInputs.psm1', 'Maester.DriftRun.psm1', 'Install-LockedModules.ps1', 'Start-MaesterContainerJob.sh', 'runtime-packages.lock.json')
     foreach ($file in $files) {
       $source = if ($file -eq 'runtime-packages.lock.json') { Join-Path $ProjectRoot $file } else { Join-Path $ProjectRoot "scripts/$file" }
       Copy-Item -LiteralPath $source -Destination (Join-Path $directory $file) -ErrorAction Stop

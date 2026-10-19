@@ -53,7 +53,7 @@ Describe 'Production runtime staging and uploads' {
     Mock Invoke-WebRequest -ModuleName Maester-RuntimeFiles { param($Uri, $OutFile) Set-Content -LiteralPath $OutFile -Value 'download fixture' }
     Mock Get-FileHash -ModuleName Maester-RuntimeFiles { @{ Hash = 'DDBC4A2D113BBD46D283CFEDCBCD117A70CAEFD7673F41F2B4E0000BADF103BC' } }
     Publish-MaesterRuntimeFiles @target -StorageAccountName test -StorageKey fixture -ProjectRoot $repoRoot
-    $global:PublisherTest.Uploads.Count | Should -Be 7
+    $global:PublisherTest.Uploads.Count | Should -Be 8
     foreach ($file in @('Invoke-MaesterContainerJob.ps1', 'Maester.DriftInputs.psm1', 'Maester.DriftRun.psm1', 'Install-LockedModules.ps1', 'Start-MaesterContainerJob.sh', 'runtime-packages.lock.json', 'powershell-7.6.6-linux-x64.tar.gz')) {
       @($global:PublisherTest.Uploads | Where-Object { $file -in $_ }).Count | Should -Be 1
     }
@@ -63,7 +63,7 @@ Describe 'Production runtime staging and uploads' {
   It 'does not download or upload a runtime archive for ACR' {
     Mock Invoke-WebRequest -ModuleName Maester-RuntimeFiles { throw 'ACR must not download.' }
     Publish-MaesterRuntimeFiles @target -StorageAccountName test -StorageKey fixture -ProjectRoot $repoRoot -IncludeACR
-    $global:PublisherTest.Uploads.Count | Should -Be 6
+    $global:PublisherTest.Uploads.Count | Should -Be 7
     Should -Invoke Invoke-WebRequest -ModuleName Maester-RuntimeFiles -Times 0 -Exactly
   }
 
