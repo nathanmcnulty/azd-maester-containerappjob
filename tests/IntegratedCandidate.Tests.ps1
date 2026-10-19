@@ -7,7 +7,7 @@ Describe 'Integrated validation candidate' {
     Mock Get-FileHash -ModuleName Maester-RuntimeFiles { @{ Hash = 'DDBC4A2D113BBD46D283CFEDCBCD117A70CAEFD7673F41F2B4E0000BADF103BC' } }
     $staging = New-MaesterRuntimeStaging -ProjectRoot $root -IncludeACR:$ACR
     try {
-      $expected = @('Invoke-MaesterContainerJob.ps1', 'Maester.DriftInputs.psm1', 'Maester.DriftRun.psm1', 'Install-LockedModules.ps1', 'Start-MaesterContainerJob.sh', 'runtime-packages.lock.json')
+      $expected = @('Invoke-MaesterContainerJob.ps1', 'Maester.AssessmentEvidence.psm1', 'Maester.DriftInputs.psm1', 'Maester.DriftRun.psm1', 'Install-LockedModules.ps1', 'Start-MaesterContainerJob.sh', 'runtime-packages.lock.json')
       if (-not $ACR) { $expected += 'powershell-7.6.6-linux-x64.tar.gz' }
       ($staging.Files -join ',') | Should -BeExactly ($expected -join ',')
       ((Get-ChildItem $staging.Path -File).Name | Sort-Object) -join ',' | Should -BeExactly (($expected | Sort-Object) -join ',')

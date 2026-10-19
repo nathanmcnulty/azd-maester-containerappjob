@@ -257,6 +257,18 @@ if ($ValidateRuntimeOnly) {
   return
 }
 
+Import-Module (Join-Path $PSScriptRoot 'Maester.AssessmentEvidence.psm1') -Force -ErrorAction Stop
+$assessmentStartedAt = [datetimeoffset]::UtcNow
+$executionName = $env:CONTAINER_APP_JOB_EXECUTION_NAME
+if (-not $EnableApprovedDrift -and $executionName -cnotmatch '^[a-z0-9][a-z0-9-]{0,127}\z') { throw 'assessment.executionIdentityMissing' }
+$evidenceSource = Get-MaesterEvidenceSource -ScriptsRoot $PSScriptRoot -LockPath $lockPath
+$evidenceModules = [ordered]@{}
+foreach ($name in $requiredModules) {
+  $loaded = @(Get-Module -Name $name)
+  if ($loaded.Count -ne 1 -or $loaded[0].Version -ne [version]$moduleVersions[$name]) { throw 'assessment.moduleIdentityMismatch' }
+  $evidenceModules[$name] = $loaded[0].Version.ToString()
+}
+
 Connect-AzAccount -Identity -ErrorAction Stop | Out-Null
 Connect-MgGraph -Identity -NoWelcome -ErrorAction Stop | Out-Null
 
@@ -466,12 +478,14 @@ if ($EnableApprovedDrift) {
   }
 }
 
+$junitPath = Join-Path $tempRoot 'pester-junit.xml'
 $pesterConfig = [PesterConfiguration]@{
   Run = @{
     # Exclude ambient drift before discovery. The explicit approved adapter
     # removes only this exclusion after validating and privately staging inputs.
     ExcludePath = @((Join-Path $testsPath 'Maester/Drift/MT1060Drift.tests.ps1'))
   }
+  TestResult = @{ Enabled = $true; OutputFormat = 'JUnitXml'; OutputPath = $junitPath; OutputEncoding = 'UTF8' }
   TestRegistry = @{
     Enabled = $false
   }
@@ -481,6 +495,10 @@ $maesterInvokeParameters = @{
   Path                = $testsPath
   OutputFolder        = $tempRoot
   NonInteractive      = $true
+  PassThru            = $true
+  OutputFolderFileName = 'assessment'
+  DisableTelemetry    = $true
+  SkipVersionCheck    = $true
   PesterConfiguration = $pesterConfig
 }
 
@@ -505,7 +523,7 @@ try {
   }
   else {
     [Environment]::SetEnvironmentVariable('MAESTER_FOLDER_DRIFT', [System.Management.Automation.Language.NullString]::Value, 'Process')
-    Invoke-Maester @maesterInvokeParameters
+    $maesterOutput = @(Invoke-Maester @maesterInvokeParameters)
   }
 }
 catch {
@@ -533,14 +551,8 @@ if ($EnableApprovedDrift) {
   Write-Output "Using generated HTML report: $outputHtmlPath"
 }
 else {
-  $generatedHtml = Get-ChildItem -Path $tempRoot -Recurse -Filter '*.html' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-  if ($generatedHtml -and $generatedHtml.Length -gt 0) {
-    $outputHtmlPath = $generatedHtml.FullName
-    Write-Output "Using generated HTML report: $outputHtmlPath"
-  }
-  else {
-    throw 'Invoke-Maester did not generate a nonempty HTML report.'
-  }
+  $outputHtmlPath = Join-Path $tempRoot 'assessment.html'
+  $assessmentEvidence = Get-MaesterAssessmentEvidence -Output $maesterOutput -JunitPath $junitPath -TestsPath $testsPath -ReportPath $outputHtmlPath -ErrorAction Stop
 }
 
 Write-Output "Maester run completed. Report generated successfully."
@@ -549,6 +561,7 @@ Write-Output "Maester run completed. Report generated successfully."
 # Upload results to storage
 # ──────────────────────────────────────────────
 
+$publication = [ordered]@{ Archive = 'Disabled'; Latest = 'Disabled'; WebApp = 'Disabled'; Mail = $(if ([string]::IsNullOrWhiteSpace($MailRecipient)) { 'Disabled' } else { 'UpstreamUnverified' }) }
 if (-not [string]::IsNullOrWhiteSpace($StorageAccountName)) {
   $storageToken = Get-PlainToken -ResourceUrl 'https://storage.azure.com/'
   $timestamp = Get-Date -Format 'yyyy-MM-dd-HHmmss'
@@ -558,14 +571,17 @@ if (-not [string]::IsNullOrWhiteSpace($StorageAccountName)) {
   try {
     Compress-GzipFile -InputPath $outputHtmlPath -OutputPath $compressedArchivePath
     Set-BlobContent -AccountName $StorageAccountName -Container $ExportContainer -BlobName $datedArchiveBlob -SourcePath $compressedArchivePath -StorageToken $storageToken -ContentType 'application/gzip' -AccessTier 'Cool' -ContentEncoding 'gzip'
+    $publication.Archive = 'Published'
     Write-Output "Uploaded archived report (gzip): $datedArchiveBlob"
   }
   catch {
+    $publication.Archive = 'Failed'
     Write-Warning "Archive upload failed: $($_.Exception.Message)"
   }
 
   try {
     Set-BlobContent -AccountName $StorageAccountName -Container $DashboardContainer -BlobName 'latest.html' -SourcePath $outputHtmlPath -StorageToken $storageToken -ContentType 'text/html' -AccessTier 'Cool'
+    $publication.Latest = 'Published'
     Write-Output "Uploaded latest report pointer: latest.html"
   }
   catch {
@@ -579,11 +595,27 @@ if (-not [string]::IsNullOrWhiteSpace($StorageAccountName)) {
 
 if (-not [string]::IsNullOrWhiteSpace($WebAppName) -and -not [string]::IsNullOrWhiteSpace($WebAppResourceGroupName)) {
   Publish-WebAppContent -AppName $WebAppName -AppResourceGroupName $WebAppResourceGroupName -SourcePath $outputHtmlPath
+  $publication.WebApp = 'Published'
 }
 elseif (-not [string]::IsNullOrWhiteSpace($WebAppName)) {
+  $publication.WebApp = 'Failed'
   Write-Warning "WEB_APP_NAME is set to '$WebAppName' but WEB_APP_RESOURCE_GROUP_NAME is missing. Skipping Web App content publish."
 }
 
+# Publish only a sanitized, execution-specific attestation. Detailed reports and
+# JUnit remain private; no tests, tenant data, tokens or exception text are logged.
+if (-not $EnableApprovedDrift -and -not [string]::IsNullOrWhiteSpace($StorageAccountName)) {
+  $validationReceipt = [ordered]@{
+    SchemaVersion = 1; Kind = 'MaesterContainerAssessment'; ExecutionName = $executionName
+    StartedAt = $assessmentStartedAt.ToString('o'); CompletedAt = [datetimeoffset]::UtcNow.ToString('o')
+    Source = $evidenceSource
+    Runtime = [ordered]@{ PowerShell = $PSVersionTable.PSVersion.ToString(); DotNet = [Environment]::Version.ToString(); Edition = $PSVersionTable.PSEdition; OS = 'Linux'; Architecture = 'X64'; Modules = $evidenceModules }
+    Assessment = $assessmentEvidence; Publication = $publication
+  }
+  $receiptPath = Join-Path $tempRoot 'validation-receipt.json'
+  $validationReceipt | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $receiptPath -Encoding utf8 -ErrorAction Stop
+  Set-BlobContent -AccountName $StorageAccountName -Container $ExportContainer -BlobName "validation-receipts/$executionName.json" -SourcePath $receiptPath -StorageToken $storageToken -ContentType 'application/json' -AccessTier 'Cool'
+}
 }
 catch {
   $approvedDriftPrimaryFailure = $_.Exception

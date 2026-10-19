@@ -1,6 +1,8 @@
 Describe 'Actual deployment entrypoint target guards (offline)' {
   BeforeAll {
     $root = Split-Path $PSScriptRoot -Parent
+    Import-Module (Join-Path $root 'scripts/Maester.AssessmentEvidence.psm1') -Force
+    . (Join-Path $PSScriptRoot 'fixtures/AssessmentEvidence.ps1')
     $savedAz = (Get-Command az -CommandType Function -ErrorAction SilentlyContinue).ScriptBlock
     $savedAzd = (Get-Command azd -CommandType Function -ErrorAction SilentlyContinue).ScriptBlock
     $savedTenant = $env:AZURE_TENANT_ID
@@ -39,7 +41,7 @@ Describe 'Actual deployment entrypoint target guards (offline)' {
       if (-not $NoTenant) { $p.TenantId = $global:EntrypointState.Tenant }
       switch ($Entry) {
         'Build' { & (Join-Path $root 'scripts/Build-MaesterImage.ps1') @p -EnvironmentName selected -ContainerAppJobName selected-job -AcrName selectedacr }
-        'Start' { & (Join-Path $root 'scripts/Invoke-JobValidation.ps1') @p -ContainerAppJobName selected-job -PassThru }
+        'Start' { & (Join-Path $root 'scripts/Invoke-JobValidation.ps1') @p -ContainerAppJobName selected-job -PassThru -RequireNoMail:$global:EntrypointState.RequireNoMail }
         'Setup' { & (Join-Path $root 'scripts/Setup-PostDeploy.ps1') @p -EnvironmentName selected -IncludeExchange }
       }
     }
@@ -49,17 +51,30 @@ Describe 'Actual deployment entrypoint target guards (offline)' {
     $sub = '11111111-1111-4111-8111-111111111111'; $tenant = '22222222-2222-4222-8222-222222222222'
     $global:EntrypointState = @{
       Sub = $sub; Tenant = $tenant; Calls = [Collections.Generic.List[string]]::new()
+      RequireNoMail = $false; ReaderDenied = $false; ReceiptMode = 'valid'; Status = 'Succeeded'
+      Env = @([pscustomobject]@{ name = 'STORAGE_ACCOUNT_NAME'; value = 'selectedstorage' })
       Builds = 0; Writes = 0; Reads = 0; FailRead = $false; Malformed = $false; DisableAt = 0
       Metadata = @{ id = "/subscriptions/$sub"; subscriptionId = $sub; tenantId = $tenant; displayName = 'Selected'; state = 'Enabled' }
     }
     Mock Start-Sleep {}
+    Mock Invoke-WebRequest {
+      $MaximumRedirection | Should -Be 0
+      if ($global:EntrypointState.ReaderDenied) { throw 'offline 403' }
+      if ($Uri -like '*comp=list*') { return [pscustomobject]@{ Content = '<EnumerationResults />' } }
+      if ($global:EntrypointState.ReceiptMode -eq 'missing') { throw 'offline 404' }
+      $r = New-TestValidationReceipt $root
+      if (@($global:EntrypointState.Env | Where-Object name -eq 'MAIL_RECIPIENT').Count) { $r.Publication.Mail = 'UpstreamUnverified' }
+      if ($global:EntrypointState.ReceiptMode -eq 'stale') { $r.ExecutionName = 'older-good-run' }
+      if ($global:EntrypointState.ReceiptMode -eq 'malformed') { return [pscustomobject]@{ Content = '{invalid' } }
+      return [pscustomobject]@{ Content = ($r | ConvertTo-Json -Depth 8) }
+    }
     Mock Invoke-RestMethod {
       if ($Method -in @('PUT','POST','PATCH','DELETE')) { $global:EntrypointState.Writes++ }
       if ($Method -eq 'POST') { return [pscustomobject]@{ name = 'execution-one' } }
-      if ($Uri -like '*/executions/*') { return [pscustomobject]@{ properties = [pscustomobject]@{ status = 'Succeeded'; template = [pscustomobject]@{ containers = @() } } } }
+      if ($Uri -like '*/executions/*') { return [pscustomobject]@{ properties = [pscustomobject]@{ status = $global:EntrypointState.Status; template = [pscustomobject]@{ containers = @() } } } }
       return [pscustomobject]@{
         location = 'eastus'; tags = @{}; identity = @{}
-        properties = [pscustomobject]@{ configuration = [pscustomobject]@{ registries = @() }; template = [pscustomobject]@{ containers = @([pscustomobject]@{ image = 'old' }) } }
+        properties = [pscustomobject]@{ configuration = [pscustomobject]@{ registries = @() }; template = [pscustomobject]@{ containers = @([pscustomobject]@{ image = 'old'; env = $global:EntrypointState.Env }) } }
       }
     }
   }
@@ -115,6 +130,39 @@ Describe 'Actual deployment entrypoint target guards (offline)' {
     $global:EntrypointState.Reads | Should -Be 2
   }
 
+  It 'rejects status-only success when the exact receipt is <_>' -ForEach @('missing','stale','malformed') {
+    $global:EntrypointState.ReceiptMode = $_
+    { Invoke-GuardedEntrypoint Start } | Should -Throw '*receiptUnavailableOrInvalid*'
+    $global:EntrypointState.Writes | Should -Be 1
+  }
+
+  It 'preserves normal mail-enabled postprovision without claiming delivery validation' {
+    $global:EntrypointState.Env += [pscustomobject]@{ name='MAIL_RECIPIENT'; value='recipient@example.invalid' }
+    $r = Invoke-GuardedEntrypoint Start
+    $r.ValidationPassed | Should -BeTrue
+    $r.ValidationScope | Should -Be 'AssessmentAndBlobWebAppPublication'
+    $r.MailDeliveryVerified | Should -BeFalse
+    $r.PublicationEvidence.Mail | Should -Be 'UpstreamUnverified'
+    $global:EntrypointState.Writes | Should -Be 1
+  }
+
+  It 'refuses to start without existing receipt data access' {
+    $global:EntrypointState.ReaderDenied = $true
+    { Invoke-GuardedEntrypoint Start } | Should -Throw '*receiptReaderUnavailable*'
+    $global:EntrypointState.Writes | Should -Be 0
+  }
+
+  It 'rejects duplicate destinations, unsafe accounts and mail before start' -ForEach @('duplicate','host','mail','newline') {
+    switch ($_) {
+      'duplicate' { $global:EntrypointState.Env += [pscustomobject]@{ name = 'STORAGE_ACCOUNT_NAME'; value = 'otherstorage' } }
+      'host' { $global:EntrypointState.Env[0].value = 'attacker.invalid/path' }
+      'newline' { $global:EntrypointState.Env[0].value = "selectedstorage`n" }
+      'mail' { $global:EntrypointState.RequireNoMail = $true; $global:EntrypointState.Env += [pscustomobject]@{ name = 'MAIL_RECIPIENT'; value = 'recipient@example.invalid' } }
+    }
+    { Invoke-GuardedEntrypoint Start } | Should -Throw '*validation.*'
+    $global:EntrypointState.Writes | Should -Be 0
+  }
+
   It 'accepts the configured environment tenant for direct build calls' {
     $env:AZURE_TENANT_ID = $global:EntrypointState.Tenant
     Invoke-GuardedEntrypoint Build -NoTenant
@@ -142,10 +190,7 @@ Describe 'Actual deployment entrypoint target guards (offline)' {
   }
 
   It 'reports execution failure as failure rather than a successful validation' {
-    Mock Invoke-RestMethod {
-      if ($Method -eq 'POST') { return [pscustomobject]@{ name = 'failed-execution' } }
-      return [pscustomobject]@{ properties = [pscustomobject]@{ status = 'Failed'; template = [pscustomobject]@{ containers = @() } } }
-    }
+    $global:EntrypointState.Status = 'Failed'
     { Invoke-GuardedEntrypoint Start } | Should -Throw '*did not succeed*Failed*'
   }
 }

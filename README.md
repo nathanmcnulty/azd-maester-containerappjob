@@ -202,3 +202,14 @@ Direct setup, image-build and job-validation calls require `-TenantId` or
 `AZURE_TENANT_ID` alongside the selected subscription. Fresh ARM metadata must
 confirm the intended tenant and an Enabled subscription before mutations. See
 [the canonical guard adoption and validation boundaries](docs/target-guard-adoption.md).
+
+### Assessment validation evidence
+
+The job validator now requires a fresh execution-bound structured receipt, not
+only Azure `Succeeded` or an HTML file. Policy failures remain valid findings;
+Maester errors, Pester discovery/setup errors and missing core execution fail
+validation. The caller needs already-authorized private Blob data access, and
+native qualification must use `-RequireNoMail` with mail disabled. Normal
+mail-enabled postprovision remains supported; inline mail delivery is explicitly
+unverified and outside the helper's validation scope. See the [receipt contract and native
+validation boundaries](docs/assessment-evidence.md).

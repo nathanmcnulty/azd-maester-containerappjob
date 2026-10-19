@@ -173,13 +173,13 @@ Describe 'Setup publishes runtime files through the real target-guarded publishe
     $global:PublisherSetupState.Uploads[0] | Should -Be 'Invoke-MaesterContainerJob.ps1'
   }
 
-  It 'uploads all seven real staged files to the selected subscription despite a different global default' {
+  It 'uploads all eight real staged files to the selected subscription despite a different global default' {
     Invoke-PublisherSetup
     $global:PublisherSetupState.Downloads | Should -Be 1
     $global:PublisherSetupState.StorageReads | Should -Be 1
-    $global:PublisherSetupState.Reads | Should -Be 9
-    $global:PublisherSetupState.Uploads.Count | Should -Be 7
-    ($global:PublisherSetupState.Uploads -join ',') | Should -Be 'Invoke-MaesterContainerJob.ps1,Maester.DriftInputs.psm1,Maester.DriftRun.psm1,Install-LockedModules.ps1,Start-MaesterContainerJob.sh,runtime-packages.lock.json,powershell-7.6.6-linux-x64.tar.gz'
+    $global:PublisherSetupState.Reads | Should -Be 10
+    $global:PublisherSetupState.Uploads.Count | Should -Be 8
+    ($global:PublisherSetupState.Uploads -join ',') | Should -Be 'Invoke-MaesterContainerJob.ps1,Maester.AssessmentEvidence.psm1,Maester.DriftInputs.psm1,Maester.DriftRun.psm1,Install-LockedModules.ps1,Start-MaesterContainerJob.sh,runtime-packages.lock.json,powershell-7.6.6-linux-x64.tar.gz'
     @($global:PublisherSetupState.Calls | Where-Object { $_ -like 'storage file upload*' -and $_ -notlike '*--subscription 11111111-1111-4111-8111-111111111111*' }).Count | Should -Be 0
     @($global:PublisherSetupState.Calls | Where-Object { $_ -like 'account set*' -or $_ -like 'login*' }).Count | Should -Be 0
   }
