@@ -5,7 +5,7 @@ Describe 'Setup publishes runtime files through the real target-guarded publishe
     $savedAz = (Get-Command az -CommandType Function -ErrorAction SilentlyContinue).ScriptBlock
     $savedAzd = (Get-Command azd -CommandType Function -ErrorAction SilentlyContinue).ScriptBlock
     $savedEnv = @{}
-    foreach ($name in 'AZURE_ENV_NAME','AZURE_TENANT_ID','INCLUDE_EXCHANGE','INCLUDE_TEAMS','INCLUDE_AZURE','INCLUDE_ACR','MAIL_RECIPIENT','AZURE_RBAC_SCOPES','SECURITY_GROUP_OBJECT_ID','SECURITY_GROUP_DISPLAY_NAME','EASY_AUTH_SECURITY_GROUP_OBJECT_ID') {
+    foreach ($name in 'AZURE_ENV_NAME','AZURE_TENANT_ID','INCLUDE_EXCHANGE','INCLUDE_TEAMS','INCLUDE_AZURE','INCLUDE_ACR','MAIL_RECIPIENT','AZURE_RBAC_SCOPES','SECURITY_GROUP_OBJECT_ID','SECURITY_GROUP_DISPLAY_NAME','EASY_AUTH_SECURITY_GROUP_OBJECT_ID','MAESTER_SETUP_CLIENT_ID') {
       $savedEnv[$name] = [Environment]::GetEnvironmentVariable($name)
       [Environment]::SetEnvironmentVariable($name, $null)
     }
@@ -50,6 +50,9 @@ Describe 'Setup publishes runtime files through the real target-guarded publishe
       if ($a[0] -eq 'env' -and $a[1] -eq 'set' -and $a[2] -eq '-e' -and $a[3] -eq 'selected') { $global:PublisherSetupState.EnvWrites++; return }
       throw "Unexpected offline azd command: $($a -join ' ')"
     }
+    function Assert-MaesterConsentPlanApproval { param($Plan,$ApprovedPlanHash); if ($Plan.planHash -ne $ApprovedPlanHash) { throw 'Offline consent mismatch' } }
+    function Register-MaesterExternalSetupStarted { $global:PublisherSetupState.MarkerCalls++ }
+    function Open-MaesterOwnershipJournal { $global:PublisherSetupState.MarkerCalls | Should -Be 1; $global:PublisherSetupState.JournalOpens++; $session=[pscustomobject]@{}; $session | Add-Member ScriptMethod Dispose {}; $session }
     function Get-MaesterSetupScopes { @('Application.Read.All') }
     function Get-MaesterSetupAccessPlan { [pscustomobject]@{ planHash = 'fixture-approved-plan'; capability = 'DeploymentSetupAccess' } }
     function Invoke-MaesterSetupAccessPlan { [pscustomobject]@{ Receipts = @{ EXO_APPROLE_ASSIGNMENT_IDS = @(); TEAMS_READER_ROLE_ASSIGNMENT_IDS = @(); AZURE_ROLE_ASSIGNMENT_IDS = @() }; EasyAuth = $null; PrincipalDisplayName = 'offline' } }
@@ -59,9 +62,10 @@ Describe 'Setup publishes runtime files through the real target-guarded publishe
     }
   }
   BeforeEach {
+    $env:MAESTER_SETUP_CLIENT_ID = '99999999-9999-4999-8999-999999999999'
     $sub = '11111111-1111-4111-8111-111111111111'; $tenant = '22222222-2222-4222-8222-222222222222'
     $global:PublisherSetupState = @{
-      Sub = $sub; Tenant = $tenant; EnvWrites = 0; Reads = 0; StorageReads = 0; Downloads = 0
+      Sub = $sub; Tenant = $tenant; JournalOpens = 0; MarkerCalls = 0; EnvWrites = 0; Reads = 0; StorageReads = 0; Downloads = 0
       StorageFailure = $false; StorageMalformed = $false; DisableBeforePublisher = $false; DisableDuringDownload = $false; DisableAfterFirstUpload = $false
       Calls = [Collections.Generic.List[string]]::new(); Uploads = [Collections.Generic.List[string]]::new(); StagingPaths = [Collections.Generic.List[string]]::new()
       Metadata = @{ id = "/subscriptions/$sub"; subscriptionId = $sub; tenantId = $tenant; displayName = 'Selected'; state = 'Enabled' }
@@ -70,7 +74,7 @@ Describe 'Setup publishes runtime files through the real target-guarded publishe
       Values = @{ AZURE_ENV_NAME = 'selected'; AZURE_SUBSCRIPTION_ID = $sub; AZURE_RESOURCE_GROUP = 'selected-group'; STORAGE_ACCOUNT_NAME = 'selectedstorage'; WEB_APP_ENABLED = 'false'; containerAppJobName = 'selected-job'; containerAppJobPrincipalId = '33333333-3333-4333-8333-333333333333' }
     }
     # Keep the real modules loaded so their transport mocks survive entrypoint imports.
-    Mock Import-Module {} -ParameterFilter { $Name -like '*Maester-SetupHelpers.psm1' -or $Name -like '*Maester-RuntimeFiles.psm1' -or $Name -like '*Maester-ConsentPlan.psm1' -or $Name -like '*Maester-SetupConsent.psm1' }
+    Mock Import-Module {} -ParameterFilter { $Name -like '*Maester-SetupHelpers.psm1' -or $Name -like '*Maester-RuntimeFiles.psm1' -or $Name -like '*Maester-ConsentPlan.psm1' -or $Name -like '*Maester-SetupConsent.psm1' -or $Name -like '*Maester-OwnershipJournal.psm1' -or $Name -like '*Maester-InfrastructureOwnership.psm1' }
     Mock Assert-GraphAccess {}
     Mock Invoke-GraphRestRequest {
       if ($Method -ne 'GET') { throw 'Unexpected Graph write' }
@@ -122,6 +126,8 @@ Describe 'Setup publishes runtime files through the real target-guarded publishe
   It 'returns a read-only access plan before runtime publication or setup receipts by default' {
     $result = Invoke-PublisherSetup -PlanOnly
     $result.capability | Should -BeExactly 'DeploymentSetupAccess'
+    $global:PublisherSetupState.JournalOpens | Should -Be 0
+    $global:PublisherSetupState.MarkerCalls | Should -Be 0
     $global:PublisherSetupState.Downloads | Should -Be 0
     $global:PublisherSetupState.Uploads.Count | Should -Be 0
     $global:PublisherSetupState.EnvWrites | Should -Be 0
@@ -164,7 +170,7 @@ Describe 'Setup publishes runtime files through the real target-guarded publishe
   It 'revalidates the subscription inside the publisher after earlier setup accepted it' {
     $global:PublisherSetupState.DisableBeforePublisher = $true
     { Invoke-PublisherSetup } | Should -Throw '*currently be Enabled*'
-    $global:PublisherSetupState.Reads | Should -Be 2
+    $global:PublisherSetupState.Reads | Should -Be 3
     $global:PublisherSetupState.StorageReads | Should -Be 0
     $global:PublisherSetupState.Downloads | Should -Be 0
     $global:PublisherSetupState.Uploads.Count | Should -Be 0
@@ -189,7 +195,7 @@ Describe 'Setup publishes runtime files through the real target-guarded publishe
     Invoke-PublisherSetup
     $global:PublisherSetupState.Downloads | Should -Be 1
     $global:PublisherSetupState.StorageReads | Should -Be 1
-    $global:PublisherSetupState.Reads | Should -Be 10
+    $global:PublisherSetupState.Reads | Should -Be 11
     $global:PublisherSetupState.Uploads.Count | Should -Be 8
     ($global:PublisherSetupState.Uploads -join ',') | Should -Be 'Invoke-MaesterContainerJob.ps1,Maester.AssessmentEvidence.psm1,Maester.DriftInputs.psm1,Maester.DriftRun.psm1,Install-LockedModules.ps1,Start-MaesterContainerJob.sh,runtime-packages.lock.json,powershell-7.6.6-linux-x64.tar.gz'
     @($global:PublisherSetupState.Calls | Where-Object { $_ -like 'storage file upload*' -and $_ -notlike '*--subscription 11111111-1111-4111-8111-111111111111*' }).Count | Should -Be 0
