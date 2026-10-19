@@ -13,6 +13,14 @@ Describe 'Maester assessment integrity independently of compliance' {
     $result = New-TestAssessmentResult $testsPath
     $result | Add-Member OutputFiles ([pscustomobject]@{ OutputHtmlFile = $report })
   }
+  It 'accepts only the reviewed Maester 2.3.0 result contract' {
+    $result.CurrentVersion = [version]'2.3.0'
+    (Get-MaesterAssessmentEvidence -Output $result -JunitPath $junit -TestsPath $testsPath -ReportPath $report).Outcome | Should -Be 'Completed'
+  }
+  It 'rejects stale and unreviewed Maester versions <_>' -ForEach @('2.2.0','2.3.1','3.0.0','2.3.0-preview') {
+    $result.CurrentVersion = $_
+    { Get-MaesterAssessmentEvidence -Output $result -JunitPath $junit -TestsPath $testsPath -ReportPath $report } | Should -Throw '*resultInvalid*'
+  }
   It 'accepts genuine policy failures with expected skipped and excluded tests' {
     $e = Get-MaesterAssessmentEvidence -Output @('incidental output', $result) -JunitPath $junit -TestsPath $testsPath -ReportPath $report
     $e.Outcome | Should -Be 'Completed'

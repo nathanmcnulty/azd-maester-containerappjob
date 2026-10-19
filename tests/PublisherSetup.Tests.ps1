@@ -47,17 +47,21 @@ Describe 'Setup publishes runtime files through the real target-guarded publishe
     function global:azd {
       $a = @($args); $global:LASTEXITCODE = 0
       if ($a[0] -eq 'env' -and $a[1] -eq 'get-values') { return ($global:PublisherSetupState.Values | ConvertTo-Json -Compress) }
-      if ($a[0] -eq 'env' -and $a[1] -eq 'set' -and $a[2] -eq '-e' -and $a[3] -eq 'selected') { return }
+      if ($a[0] -eq 'env' -and $a[1] -eq 'set' -and $a[2] -eq '-e' -and $a[3] -eq 'selected') { $global:PublisherSetupState.EnvWrites++; return }
       throw "Unexpected offline azd command: $($a -join ' ')"
     }
+    function Get-MaesterSetupScopes { @('Application.Read.All') }
+    function Get-MaesterSetupAccessPlan { [pscustomobject]@{ planHash = 'fixture-approved-plan'; capability = 'DeploymentSetupAccess' } }
+    function Invoke-MaesterSetupAccessPlan { [pscustomobject]@{ Receipts = @{ EXO_APPROLE_ASSIGNMENT_IDS = @(); TEAMS_READER_ROLE_ASSIGNMENT_IDS = @(); AZURE_ROLE_ASSIGNMENT_IDS = @() }; EasyAuth = $null; PrincipalDisplayName = 'offline' } }
     function Invoke-PublisherSetup {
-      & (Join-Path $root 'scripts/Setup-PostDeploy.ps1') -SubscriptionId $global:PublisherSetupState.Sub -TenantId $global:PublisherSetupState.Tenant -EnvironmentName selected -ResourceGroupName selected-group -PermissionProfile Minimal
+      param([switch]$PlanOnly)
+      & (Join-Path $root 'scripts/Setup-PostDeploy.ps1') -SubscriptionId $global:PublisherSetupState.Sub -TenantId $global:PublisherSetupState.Tenant -EnvironmentName selected -ResourceGroupName selected-group -PermissionProfile Minimal -Apply:(-not $PlanOnly) -ApprovedPlanHash fixture-approved-plan
     }
   }
   BeforeEach {
     $sub = '11111111-1111-4111-8111-111111111111'; $tenant = '22222222-2222-4222-8222-222222222222'
     $global:PublisherSetupState = @{
-      Sub = $sub; Tenant = $tenant; Reads = 0; StorageReads = 0; Downloads = 0
+      Sub = $sub; Tenant = $tenant; EnvWrites = 0; Reads = 0; StorageReads = 0; Downloads = 0
       StorageFailure = $false; StorageMalformed = $false; DisableBeforePublisher = $false; DisableDuringDownload = $false; DisableAfterFirstUpload = $false
       Calls = [Collections.Generic.List[string]]::new(); Uploads = [Collections.Generic.List[string]]::new(); StagingPaths = [Collections.Generic.List[string]]::new()
       Metadata = @{ id = "/subscriptions/$sub"; subscriptionId = $sub; tenantId = $tenant; displayName = 'Selected'; state = 'Enabled' }
@@ -66,7 +70,7 @@ Describe 'Setup publishes runtime files through the real target-guarded publishe
       Values = @{ AZURE_ENV_NAME = 'selected'; AZURE_SUBSCRIPTION_ID = $sub; AZURE_RESOURCE_GROUP = 'selected-group'; STORAGE_ACCOUNT_NAME = 'selectedstorage'; WEB_APP_ENABLED = 'false'; containerAppJobName = 'selected-job'; containerAppJobPrincipalId = '33333333-3333-4333-8333-333333333333' }
     }
     # Keep the real modules loaded so their transport mocks survive entrypoint imports.
-    Mock Import-Module {} -ParameterFilter { $Name -like '*Maester-SetupHelpers.psm1' -or $Name -like '*Maester-RuntimeFiles.psm1' }
+    Mock Import-Module {} -ParameterFilter { $Name -like '*Maester-SetupHelpers.psm1' -or $Name -like '*Maester-RuntimeFiles.psm1' -or $Name -like '*Maester-ConsentPlan.psm1' -or $Name -like '*Maester-SetupConsent.psm1' }
     Mock Assert-GraphAccess {}
     Mock Invoke-GraphRestRequest {
       if ($Method -ne 'GET') { throw 'Unexpected Graph write' }
@@ -113,6 +117,14 @@ Describe 'Setup publishes runtime files through the real target-guarded publishe
     if ($savedAz) { Set-Item function:global:az $savedAz }
     if ($savedAzd) { Set-Item function:global:azd $savedAzd }
     Remove-Variable PublisherSetupState -Scope Global
+  }
+
+  It 'returns a read-only access plan before runtime publication or setup receipts by default' {
+    $result = Invoke-PublisherSetup -PlanOnly
+    $result.capability | Should -BeExactly 'DeploymentSetupAccess'
+    $global:PublisherSetupState.Downloads | Should -Be 0
+    $global:PublisherSetupState.Uploads.Count | Should -Be 0
+    $global:PublisherSetupState.EnvWrites | Should -Be 0
   }
 
   It 'rejects invalid initial subscription <case> before downloads or uploads' -ForEach @('wrong tenant','wrong subscription','Disabled','missing state' | ForEach-Object { @{ case = $_ } }) {

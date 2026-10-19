@@ -69,6 +69,18 @@ jobs:
           --mount type=bind,source="${{ github.workspace }}/scripts/Test-ContainerRuntime.ps1",target=/tmp/Test-ContainerRuntime.ps1,readonly
           maester-runtime:validation pwsh -NoLogo -NoProfile -File /tmp/Test-ContainerRuntime.ps1
 
+      - name: Qualify actual Maester 2.3.0 results and strict gates offline
+        run: >-
+          docker run --rm --network none --env POWERSHELL_TELEMETRY_OPTOUT=1 --env DOTNET_CLI_TELEMETRY_OPTOUT=1
+          --mount type=bind,source="${{ github.workspace }}",target=/repo,readonly
+          maester-runtime:validation pwsh -NoLogo -NoProfile -File /repo/tests/Invoke-Maester230Compatibility.ps1
+
+      - name: Qualify the unchanged approved drift suite against Maester 2.3.0
+        run: >-
+          docker run --rm --network none --env POWERSHELL_TELEMETRY_OPTOUT=1 --env DOTNET_CLI_TELEMETRY_OPTOUT=1
+          --mount type=bind,source="${{ github.workspace }}",target=/repo,readonly
+          maester-runtime:validation pwsh -NoLogo -NoProfile -File /repo/tests/Invoke-Maester230DriftCompatibility.ps1
+
       - name: Verify the mounted ACR production invocation offline
         shell: pwsh
         run: |

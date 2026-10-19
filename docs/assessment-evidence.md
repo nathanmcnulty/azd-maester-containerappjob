@@ -7,7 +7,7 @@ structured evidence before publishing the HTML to Blob or the optional Web App.
 
 ## Bounded qualification contract
 
-The locked Maester 2.2.0 `Invoke-Maester -PassThru` result is captured without
+The locked Maester 2.3.0 `Invoke-Maester -PassThru` result is captured without
 printing its tenant data or test details. Pester 6.2.0 separately writes JUnit XML
 under the fresh, runner-owned temporary output directory. Exactly one converted
 Maester result is required. Its six outcome counts must reconcile with its test
@@ -118,8 +118,8 @@ not silently become exclusions merely to make qualification green.
 
 ## Sources
 
-- [Maester 2.2.0 invocation](https://github.com/maester365/maester/blob/c657a4b8a24267ccd795edb0c7db402e0d440e3b/powershell/public/Invoke-Maester.ps1)
-- [Maester result conversion and reclassification](https://github.com/maester365/maester/blob/c657a4b8a24267ccd795edb0c7db402e0d440e3b/powershell/internal/ConvertTo-MtMaesterResult.ps1)
+- [Maester 2.3.0 invocation](https://github.com/maester365/maester/blob/7413c42d3fcc724dfea94d2726e690ddd364d914/powershell/public/Invoke-Maester.ps1)
+- [Maester result conversion and reclassification](https://github.com/maester365/maester/blob/7413c42d3fcc724dfea94d2726e690ddd364d914/powershell/internal/ConvertTo-MtMaesterResult.ps1)
 - [Pester 6.2.0 JUnit root counters](https://github.com/pester/Pester/blob/6.2.0/src/functions/TestResults.JUnit4.ps1)
 - [Azure built-in execution environment variables](https://learn.microsoft.com/azure/container-apps/environment-variables#built-in-environment-variables)
 - [Blob List operation](https://learn.microsoft.com/rest/api/storageservices/list-blobs)

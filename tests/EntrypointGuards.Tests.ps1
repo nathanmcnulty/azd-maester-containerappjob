@@ -223,6 +223,8 @@ Describe 'Setup entrypoint forwards the validated tenant through real Exchange t
       if ($a[0] -eq 'env' -and $a[1] -eq 'set' -and $a[2] -eq '-e' -and $a[3] -eq 'selected') { return }
       throw "Unexpected offline azd: $($a -join ' ')"
     }
+    function Get-MaesterSetupScopes { @('Application.Read.All') }
+    function Get-MaesterSetupAccessPlan { throw 'Reached end of Exchange test boundary' }
     function global:Invoke-MgGraphRequest { param($Method,$Uri) throw 'Unmocked Graph request' }
     function global:Connect-ExchangeOnline { param($AccessToken,$ShowBanner,$Organization) $global:ExchangeEntryState.Connected++; $AccessToken | Should -Be 'offline-outlook' }
     function global:New-ServicePrincipal { param($AppId,$ObjectId,$DisplayName) $global:ExchangeEntryState.ExchangeWrites++ }
@@ -235,9 +237,11 @@ Describe 'Setup entrypoint forwards the validated tenant through real Exchange t
       Metadata = @{ id = "/subscriptions/$sub"; subscriptionId = $sub; tenantId = $tenant; displayName = 'Selected'; state = 'Enabled' }
       Values = @{ AZURE_ENV_NAME = 'selected'; AZURE_SUBSCRIPTION_ID = $sub; AZURE_RESOURCE_GROUP = 'selected-group'; STORAGE_ACCOUNT_NAME = 'selectedstorage'; WEB_APP_ENABLED = 'false'; containerAppJobName = 'selected-job'; containerAppJobPrincipalId = '33333333-3333-4333-8333-333333333333' }
     }
-    Mock Import-Module {} -ParameterFilter { $Name -like '*Maester-SetupHelpers.psm1' }
+    Mock Import-Module {} -ParameterFilter { $Name -like '*Maester-SetupHelpers.psm1' -or $Name -like '*Maester-ConsentPlan.psm1' -or $Name -like '*Maester-SetupConsent.psm1' }
     Mock Assert-GraphAccess {}
+    Mock Get-Module { [pscustomobject]@{ Name = 'ExchangeOnlineManagement' } } -ParameterFilter { $Name -eq 'ExchangeOnlineManagement' }
     Mock Invoke-GraphRestRequest {
+      if ($Uri -like '*/organization?*') { return [pscustomobject]@{ value = @([pscustomobject]@{ verifiedDomains = @([pscustomobject]@{ isInitial = $true; name = 'selected.onmicrosoft.com' }) }) } }
       if ($Method -ne 'GET') { throw 'Unexpected Graph write' }
       $roles = @('Directory.Read.All','DirectoryRecommendations.Read.All','IdentityRiskEvent.Read.All','Policy.Read.All','Policy.Read.ConditionalAccess','RoleManagement.Read.All','Reports.Read.All','UserAuthenticationMethod.Read.All')
       if ($Uri -like '*/me?*') { return $null }
@@ -277,7 +281,7 @@ Describe 'Setup entrypoint forwards the validated tenant through real Exchange t
   It 'runs the actual setup caller and real helper with selected-tenant Outlook arguments' {
     { & (Join-Path $root 'scripts/Setup-PostDeploy.ps1') -SubscriptionId $global:ExchangeEntryState.Sub -TenantId $global:ExchangeEntryState.Tenant -EnvironmentName selected -ResourceGroupName selected-group -IncludeExchange -PermissionProfile Minimal } | Should -Throw '*end of Exchange test boundary*'
     $global:ExchangeEntryState.Connected | Should -Be 1
-    $global:ExchangeEntryState.ExchangeWrites | Should -Be 2
+    $global:ExchangeEntryState.ExchangeWrites | Should -Be 0
     ($global:ExchangeEntryState.OutlookArgs -join ' ') | Should -BeLike '*--tenant 22222222-2222-4222-8222-222222222222'
   }
   It 'stops the actual setup Exchange role path when Outlook returns a different tenant' {

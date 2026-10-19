@@ -419,10 +419,10 @@ if (-not $EnableApprovedDrift) {
 }
 
 $maesterModule = Get-Module -Name Maester -ListAvailable |
-  Where-Object { $_.Version -eq [version]'2.2.0' } |
+  Where-Object { $_.Version -eq [version]'2.3.0' } |
   Select-Object -First 1
 if (-not $maesterModule) {
-  throw 'Maester module version 2.2.0 was not found after import.'
+  throw 'Maester module version 2.3.0 was not found after import.'
 }
 
 $moduleRoot = Split-Path -Path $maesterModule.Path -Parent
