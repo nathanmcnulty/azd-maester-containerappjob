@@ -1,12 +1,20 @@
 Describe 'Canonical target guard provenance' {
   BeforeAll { $root = Split-Path $PSScriptRoot -Parent }
-  It 'pins the reviewed pilot revision and exact vendored bytes' {
+  It 'pins the reviewed consent migration revision and exact vendored bytes' {
     $lock = Get-Content (Join-Path $root 'azd-components.lock.json') -Raw | ConvertFrom-Json
     $component = $lock.components | Where-Object id -eq 'maester-azd-hooks'
-    $component.version | Should -BeExactly '1.0.0'
-    $component.sourceRevision | Should -BeExactly 'fd26f7351f36c569067ae37edcb35d6b6cc40f29'
-    $component.files.Count | Should -Be 8
+    $component.version | Should -BeExactly '2.1.0'
+    $component.sourceRevision | Should -BeExactly '552ade2f0267e6872bd681f9a1d8a67ac72d055b'
+    $component.files.Count | Should -Be 10
     foreach ($file in $component.files) {
+      (Get-FileHash -LiteralPath (Join-Path $root $file.target) -Algorithm SHA256).Hash.ToLowerInvariant() | Should -BeExactly $file.sha256
+    }
+    $coordinator = @($lock.components | Where-Object id -eq 'graph-delegated-authentication')
+    $coordinator.Count | Should -Be 1
+    $coordinator[0].version | Should -BeExactly '1.1.0'
+    $coordinator[0].sourceRevision | Should -BeExactly '552ade2f0267e6872bd681f9a1d8a67ac72d055b'
+    $coordinator[0].files.Count | Should -Be 2
+    foreach ($file in $coordinator[0].files) {
       (Get-FileHash -LiteralPath (Join-Path $root $file.target) -Algorithm SHA256).Hash.ToLowerInvariant() | Should -BeExactly $file.sha256
     }
   }

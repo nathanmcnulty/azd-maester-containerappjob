@@ -83,7 +83,7 @@ Describe 'Maintained complete runner entrypoint evidence (offline)' {
     }
     Remove-Variable ReceiptRunner -Scope Global
   }
-  It 'runs the unmodified complete entrypoint and uploads an execution-bound policy-finding receipt' {
+  It 'emits the real test-host receipt and validates an explicit production-runtime fixture' {
     $output = & (Join-Path $staged 'Invoke-MaesterContainerJob.ps1')
     $global:ReceiptRunner.Uploads.Count | Should -Be 3
     $global:ReceiptRunner.Uploads[2] | Should -Be 'https://offlinestorage.blob.core.windows.net/archive/validation-receipts/offline-execution.json'
@@ -92,10 +92,31 @@ Describe 'Maintained complete runner entrypoint evidence (offline)' {
     $r.Source.RunnerSha256 | Should -Be ((Get-FileHash (Join-Path $staged 'Invoke-MaesterContainerJob.ps1')).Hash.ToLowerInvariant())
     $r.Publication.Archive | Should -Be 'Published'
     $r.Publication.Mail | Should -Be 'Disabled'
-    $verified = Assert-MaesterValidationReceipt -Json $global:ReceiptRunner.ReceiptJson -ExecutionName 'offline-execution' -ExpectedSource $r.Source -ExpectedModules $r.Runtime.Modules -NotBefore ([datetimeoffset]::UtcNow.AddMinutes(-1)) -ExpectWebApp $false
+    $r.Runtime.PowerShell | Should -BeExactly $PSVersionTable.PSVersion.ToString()
+    $expected = @{ ExecutionName='offline-execution'; ExpectedSource=$r.Source; ExpectedModules=$r.Runtime.Modules; NotBefore=[datetimeoffset]::UtcNow.AddMinutes(-1); ExpectWebApp=$false }
+    # Hosted repository tests may use a newer 7.6 patch than the exact production
+    # image. Preserve its real emitted evidence: a different host must not pass
+    # the production gate. The image/runtime jobs qualify the actual locked host.
+    if ($PSVersionTable.PSVersion.ToString() -ceq '7.6.6') {
+      (Assert-MaesterValidationReceipt -Json $global:ReceiptRunner.ReceiptJson @expected).Runtime.PowerShell | Should -BeExactly '7.6.6'
+    } else {
+      { Assert-MaesterValidationReceipt -Json $global:ReceiptRunner.ReceiptJson @expected } | Should -Throw '*validation.receiptInvalidOrMismatched*'
+    }
+    # Only this explicitly synthetic verification fixture supplies the reviewed
+    # production version. Never rewrite the emitted/uploaded receipt or the gate.
+    $productionFixture = $global:ReceiptRunner.ReceiptJson | ConvertFrom-Json -AsHashtable -DateKind String
+    $productionFixture.Runtime.PowerShell = '7.6.6'
+    $verified = Assert-MaesterValidationReceipt -Json ($productionFixture | ConvertTo-Json -Depth 20) @expected
     $verified.Assessment.Outcome | Should -Be 'Completed'
+    $global:ReceiptRunner.Receipt.Runtime.PowerShell | Should -BeExactly $PSVersionTable.PSVersion.ToString()
     ($output -join "`n") | Should -Not -Match 'private fixture|offline-token|offline-tenant'
     Should -Invoke Invoke-Maester -Times 1 -Exactly
+  }
+  It 'rejects an unreviewed production PowerShell version <_>' -ForEach @('7.6.7','7.7.0') {
+    $null = & (Join-Path $staged 'Invoke-MaesterContainerJob.ps1')
+    $r = $global:ReceiptRunner.ReceiptJson | ConvertFrom-Json -AsHashtable -DateKind String
+    $r.Runtime.PowerShell = $_
+    { Assert-MaesterValidationReceipt -Json ($r | ConvertTo-Json -Depth 20) -ExecutionName 'offline-execution' -ExpectedSource $r.Source -ExpectedModules $r.Runtime.Modules -NotBefore ([datetimeoffset]::UtcNow.AddMinutes(-1)) -ExpectWebApp $false } | Should -Throw '*validation.receiptInvalidOrMismatched*'
   }
   It 'preserves upstream inline mail configuration while attesting no delivery guarantee' {
     $env:MAIL_RECIPIENT = 'recipient@example.invalid'
