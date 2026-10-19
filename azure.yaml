@@ -1,6 +1,8 @@
 name: azd-maester-containerappjob
 metadata:
   template: azd-maester-containerappjob@0.1.0
+# infra/main.parameters.json maps JOB_TRIGGER_TYPE to the Bicep jobTriggerType.
+# Unset: Schedule (weekly). Set JOB_TRIGGER_TYPE=Manual for no scheduled runs.
 infra:
   provider: bicep
   path: infra
