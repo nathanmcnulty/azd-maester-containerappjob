@@ -84,6 +84,34 @@ param webAppSkuName string = 'F1'
 })
 param includeACROption string = 'false'
 
+@description('Job trigger: Schedule retains the weekly assessment; Manual disables scheduled executions.')
+@allowed([
+  'Schedule'
+  'Manual'
+])
+@metadata({
+  azd: {
+    default: 'Schedule'
+  }
+})
+param jobTriggerType string = 'Schedule'
+
+var manualJobTriggerConfiguration = {
+  triggerType: 'Manual'
+  manualTriggerConfig: {
+    parallelism: 1
+    replicaCompletionCount: 1
+  }
+}
+var scheduledJobTriggerConfiguration = {
+  triggerType: 'Schedule'
+  scheduleTriggerConfig: {
+    cronExpression: '0 0 * * 0'
+    parallelism: 1
+    replicaCompletionCount: 1
+  }
+}
+
 @description('Enable can-not-delete locks on key resources')
 param enableResourceLocks bool = true
 
@@ -263,20 +291,14 @@ resource containerAppJob 'Microsoft.App/jobs@2024-03-01' = {
       }
   properties: {
     environmentId: managedEnvironment.id
-    configuration: {
-      triggerType: 'Schedule'
-      scheduleTriggerConfig: {
-        cronExpression: '0 0 * * 0'
-        parallelism: 1
-        replicaCompletionCount: 1
-      }
+    configuration: union(jobTriggerType == 'Manual' ? manualJobTriggerConfiguration : scheduledJobTriggerConfiguration, {
       replicaRetryLimit: 1
       replicaTimeout: 3600
       // ACR registry is configured post-deployment by Build-MaesterImage.ps1 to avoid
       // a circular dependency: the Job's system identity needs AcrPull before provisioning
       // can validate ACR access, but AcrPull requires the Job's principalId.
       registries: []
-    }
+    })
     template: {
       containers: [
         {

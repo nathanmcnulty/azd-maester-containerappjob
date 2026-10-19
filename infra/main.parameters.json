@@ -20,6 +20,9 @@
     "includeACROption": {
       "value": "${INCLUDE_ACR}"
     },
+    "jobTriggerType": {
+      "value": "${JOB_TRIGGER_TYPE=Schedule}"
+    },
     "mailRecipient": {
       "value": "${MAIL_RECIPIENT}"
     },
