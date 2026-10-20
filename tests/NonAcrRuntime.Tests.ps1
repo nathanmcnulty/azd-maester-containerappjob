@@ -22,6 +22,18 @@ BeforeAll {
     if (($a[0..2] -join ' ') -eq 'storage file upload') {
       $s.Calls[$s.Calls.Count - 2] | Should -BeLike 'rest *'
       $s.Uploads.Add($a)
+      '--account-key' | Should -Not -BeIn $a
+      ($a -join ' ') | Should -Not -Match 'fixture-secret-key'
+      $env:AZURE_STORAGE_KEY | Should -BeExactly $s.ExpectedKey
+      [Environment]::GetEnvironmentVariables('Process').Contains('AZURE_STORAGE_CONNECTION_STRING') | Should -BeTrue
+      [Environment]::GetEnvironmentVariable('AZURE_STORAGE_CONNECTION_STRING', 'Process') | Should -BeExactly ''
+      $a[([array]::IndexOf($a, '--account-name') + 1)] | Should -BeExactly 'test'
+      $a[([array]::IndexOf($a, '--auth-mode') + 1)] | Should -BeExactly 'key'
+      if ($s.CheckChild) {
+        & python3 (Join-Path $repoRoot 'tests/fixtures/check-upload-environment.py') @a
+        $LASTEXITCODE | Should -Be 0
+      }
+      if ($s.ThrowUpload) { throw 'invocation diagnostic fixture-secret-key' }
       if ($s.DisableAfterUpload) { $s.Metadata.state = 'Disabled' }
       $global:LASTEXITCODE = $s.UploadExit
       return
@@ -37,7 +49,7 @@ Describe 'Production runtime staging and uploads' {
     $script:target = @{ SubscriptionId = $sub; TenantId = $tenant; ResourceGroupName = 'selected-group' }
     $global:PublisherTest = @{
       Sub = $sub; MetadataFailure = $false; Malformed = $false; StorageFailure = $false; StorageMalformed = $false
-      UploadExit = 0; DisableAfterUpload = $false; Calls = [Collections.Generic.List[string]]::new(); Uploads = [Collections.Generic.List[object]]::new()
+      ExpectedKey = 'fixture'; CheckChild = $false; ThrowUpload = $false; UploadExit = 0; DisableAfterUpload = $false; Calls = [Collections.Generic.List[string]]::new(); Uploads = [Collections.Generic.List[object]]::new()
       Metadata = @{ id = "/subscriptions/$sub"; subscriptionId = $sub; tenantId = $tenant; displayName = 'Selected'; state = 'Enabled' }
       Storage = @{ id = "/subscriptions/$sub/resourceGroups/selected-group/providers/Microsoft.Storage/storageAccounts/test"; name = 'test'; type = 'Microsoft.Storage/storageAccounts'; resourceGroup = 'selected-group' }
     }
@@ -85,6 +97,58 @@ Describe 'Production runtime staging and uploads' {
     $global:PublisherTest.Uploads.Count | Should -Be 1
   }
 
+
+  It 'restores <KeyState>/<ConnectionState> credentials after <Outcome> without exposing them' -ForEach @(
+    foreach ($keyState in 'absent','empty','populated') {
+      foreach ($connectionState in 'absent','empty','populated') {
+        foreach ($outcome in 'success','nonzero','throw','guard') {
+          @{ KeyState = $keyState; ConnectionState = $connectionState; Outcome = $outcome }
+        }
+      }
+    }
+  ) {
+    $names = @('AZURE_STORAGE_KEY','AZURE_STORAGE_CONNECTION_STRING','AZURE_STORAGE_AUTH_MODE','AZURE_CONFIG_DIR')
+    $saved = @{}; foreach ($name in $names) { $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
+    try {
+      $values = @{ absent = $null; empty = ''; populated = 'prior-credential' }
+      foreach ($pair in @(@($names[0],$KeyState), @($names[1],$ConnectionState))) {
+        if ($pair[1] -eq 'absent') { Remove-Item ('Env:' + $pair[0]) -ErrorAction SilentlyContinue }
+        else { [Environment]::SetEnvironmentVariable($pair[0], $values[$pair[1]], 'Process') }
+      }
+      $env:AZURE_STORAGE_AUTH_MODE = 'login'
+      $env:AZURE_CONFIG_DIR = Join-Path $TestDrive 'conflicting-config'
+      New-Item -ItemType Directory -Path $env:AZURE_CONFIG_DIR -Force | Out-Null
+      Set-Content (Join-Path $env:AZURE_CONFIG_DIR config) "[storage]`nconnection_string=AccountName=wrongaccount;AccountKey=wrong-key`nauth_mode=login`naccount=wrongaccount`nkey=wrong-key"
+      $global:PublisherTest.ExpectedKey = 'fixture-secret-key'
+      $global:PublisherTest.CheckChild = $true
+      $global:PublisherTest.UploadExit = $(if ($Outcome -eq 'nonzero') { 7 } else { 0 })
+      $global:PublisherTest.ThrowUpload = $Outcome -eq 'throw'
+      $global:PublisherTest.DisableAfterUpload = $Outcome -eq 'guard'
+      $diagnostics = @()
+      try {
+        $diagnostics = @(Publish-MaesterRuntimeFiles @target -StorageAccountName test -StorageKey fixture-secret-key -ProjectRoot $repoRoot -IncludeACR *>&1)
+        $Outcome | Should -BeExactly 'success'
+      }
+      catch {
+        $Outcome | Should -Not -BeExactly 'success'
+        $diagnostics += $_
+        if ($Outcome -ne 'guard') { $_.Exception.Message | Should -BeLike 'Failed to upload*' }
+      }
+      ($diagnostics | Out-String) | Should -Not -Match 'fixture-secret-key|wrong-key|prior-credential'
+      ($global:PublisherTest.Calls -join "`n") | Should -Not -Match 'fixture-secret-key|wrong-key|prior-credential|--account-key'
+      $global:PublisherTest.Uploads.Count | Should -Be $(if ($Outcome -eq 'success') { 7 } else { 1 })
+      foreach ($pair in @(@($names[0],$KeyState), @($names[1],$ConnectionState))) {
+        $current = [Environment]::GetEnvironmentVariable($pair[0], 'Process')
+        $current | Should -BeExactly $values[$pair[1]]
+        [Environment]::GetEnvironmentVariables('Process').Contains($pair[0]) | Should -Be ($pair[1] -ne 'absent')
+      }
+      $env:AZURE_STORAGE_AUTH_MODE | Should -BeExactly 'login'
+    }
+    finally { foreach ($name in $names) {
+      if ($null -eq $saved[$name]) { Remove-Item ('Env:' + $name) -ErrorAction SilentlyContinue }
+      else { [Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process') }
+    } }
+  }
 
   It 'rejects invalid target or metadata before staging: <Case>' -ForEach @(
     @{ Case = 'wrong tenant' }, @{ Case = 'wrong subscription' }, @{ Case = 'disabled' }, @{ Case = 'missing state' },
