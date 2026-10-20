@@ -3,8 +3,8 @@ Describe 'Canonical target guard provenance' {
   It 'pins the reviewed consent migration revision and exact vendored bytes' {
     $lock = Get-Content (Join-Path $root 'azd-components.lock.json') -Raw | ConvertFrom-Json
     $component = $lock.components | Where-Object id -eq 'maester-azd-hooks'
-    $component.version | Should -BeExactly '3.0.0'
-    $component.sourceRevision | Should -BeExactly '65f6577ce805f2886b1d90198c140fd180e27e4a'
+    $component.version | Should -BeExactly '3.0.1'
+    $component.sourceRevision | Should -BeExactly 'b9019c809bcffd2747fdb2f47e455ee9edfe7564'
     $component.files.Count | Should -Be 13
     foreach ($file in $component.files) {
       (Get-FileHash -LiteralPath (Join-Path $root $file.target) -Algorithm SHA256).Hash.ToLowerInvariant() | Should -BeExactly $file.sha256
@@ -44,5 +44,19 @@ Describe 'Owned cleanup authority stays separately declared' {
     $cleanup.permission | Should -Not -Contain 'Directory.AccessAsUser.All'
     $manifest.coverage | Should -BeExactly 'partial'
     ($manifest.gaps -join ' ') | Should -Match 'setup client'
+  }
+}
+
+Describe 'Consent documentation follows distinct component pins' {
+  It 'documents the current hooks version separately from the unchanged coordinator' {
+    $root = Split-Path $PSScriptRoot -Parent
+    $lock = Get-Content (Join-Path $root 'azd-components.lock.json') -Raw | ConvertFrom-Json
+    $hooks = $lock.components | Where-Object id -EQ 'maester-azd-hooks'
+    $coordinator = $lock.components | Where-Object id -EQ 'graph-delegated-authentication'
+    $documentation = Get-Content (Join-Path $root 'docs/setup-consent-migration.md') -Raw
+    $documentation | Should -Match ('hooks ' + [regex]::Escape($hooks.version))
+    $documentation | Should -Match ('coordinator (?:remains )?' + [regex]::Escape($coordinator.version))
+    $documentation | Should -Match ([regex]::Escape($coordinator.sourceRevision))
+    $documentation | Should -Match '\.\./azd-components\.lock\.json'
   }
 }
