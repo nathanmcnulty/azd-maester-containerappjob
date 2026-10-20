@@ -67,9 +67,33 @@ function Publish-MaesterRuntimeFiles {
     foreach ($file in $staging.Files) {
       # Downloads can be long, and subscription state can change between files.
       Get-AzCliSubscriptionContext -SubscriptionId $SubscriptionId -TenantId $TenantId | Out-Null
-      & az storage file upload --subscription $SubscriptionId --account-name $StorageAccountName --account-key $StorageKey `
-        --share-name scripts --source (Join-Path $staging.Path $file) --path $file --no-progress --output none
-      if ($LASTEXITCODE -ne 0) { throw "Failed to upload '$file' to Azure Files share 'scripts'." }
+      # Scope credentials to the upload child process, never its argument list.
+      # An actual empty value overrides storage.connection_string in CLI config;
+      # removing the variable would allow that fallback to change the account.
+      $previousKey = [Environment]::GetEnvironmentVariable('AZURE_STORAGE_KEY', 'Process')
+      $previousConnectionString = [Environment]::GetEnvironmentVariable('AZURE_STORAGE_CONNECTION_STRING', 'Process')
+      try {
+        [Environment]::SetEnvironmentVariable('AZURE_STORAGE_KEY', $StorageKey, 'Process')
+        [Environment]::SetEnvironmentVariable('AZURE_STORAGE_CONNECTION_STRING', '', 'Process')
+        if ([Environment]::GetEnvironmentVariable('AZURE_STORAGE_CONNECTION_STRING', 'Process') -cne '' -or
+            -not [Environment]::GetEnvironmentVariables('Process').Contains('AZURE_STORAGE_CONNECTION_STRING')) {
+          throw 'Unable to isolate upload credentials.'
+        }
+        & az storage file upload --subscription $SubscriptionId --account-name $StorageAccountName --auth-mode key `
+          --share-name scripts --source (Join-Path $staging.Path $file) --path $file --no-progress --output none 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Upload exited unsuccessfully.' }
+      }
+      catch {
+        # Do not forward native diagnostics or invocation exceptions: they may
+        # contain credential material. Keep the failure scoped to this file.
+        throw "Failed to upload '$file' to Azure Files share 'scripts'."
+      }
+      finally {
+        if ($null -eq $previousKey) { Remove-Item Env:AZURE_STORAGE_KEY -ErrorAction SilentlyContinue }
+        else { [Environment]::SetEnvironmentVariable('AZURE_STORAGE_KEY', $previousKey, 'Process') }
+        if ($null -eq $previousConnectionString) { Remove-Item Env:AZURE_STORAGE_CONNECTION_STRING -ErrorAction SilentlyContinue }
+        else { [Environment]::SetEnvironmentVariable('AZURE_STORAGE_CONNECTION_STRING', $previousConnectionString, 'Process') }
+      }
     }
   }
   finally { Remove-Item -LiteralPath $staging.Path -Recurse -Force }

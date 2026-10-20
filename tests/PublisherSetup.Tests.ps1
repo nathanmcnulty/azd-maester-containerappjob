@@ -31,10 +31,15 @@ Describe 'Setup publishes runtime files through the real target-guarded publishe
         return ($s.Storage | ConvertTo-Json -Compress)
       }
       if ($a[0] -eq 'storage' -and $a[1] -eq 'file' -and $a[2] -eq 'upload') {
-        foreach ($pair in @(@('--account-name','selectedstorage'), @('--account-key','offline-key'), @('--share-name','scripts'))) {
+        foreach ($pair in @(@('--account-name','selectedstorage'), @('--auth-mode','key'), @('--share-name','scripts'))) {
           $index = [array]::IndexOf($a, $pair[0])
           if ($index -lt 0 -or $a[$index + 1] -ne $pair[1]) { throw 'Incorrect upload target' }
         }
+        '--account-key' | Should -Not -BeIn $a
+        ($a -join ' ') | Should -Not -Match 'offline-key'
+        $env:AZURE_STORAGE_KEY | Should -BeExactly 'offline-key'
+        [Environment]::GetEnvironmentVariables('Process').Contains('AZURE_STORAGE_CONNECTION_STRING') | Should -BeTrue
+        [Environment]::GetEnvironmentVariable('AZURE_STORAGE_CONNECTION_STRING', 'Process') | Should -BeExactly ''
         $source = $a[([array]::IndexOf($a, '--source') + 1)]
         if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw 'Upload source does not exist' }
         $s.Uploads.Add($a[([array]::IndexOf($a, '--path') + 1)])
