@@ -4,7 +4,7 @@ Deploys a production-style Maester automation solution on Azure with:
 
 - Azure Container App Job (PowerShell 7.6.6 / .NET 10 Linux x64, with optional ACR)
 - Managed identity + Graph permissions
-- Runner script mounted via Azure Files volume
+- Keyless private runtime bundle with managed identity (optional ACR packages the runner)
 - Storage-backed report history (`archive`) and latest pointer (`latest/latest.html`)
 - Optional Azure Container Registry with pre-built image for faster startup
 - Optional App Service + Easy Auth portal in WebApp mode
@@ -105,37 +105,17 @@ Preserve both `.azure/<env>/maester-*-ownership.json` receipts until cleanup is 
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│ Container App Environment                                        │
-│   ┌────────────────────────────┐   ┌─────────────────────────┐   │
-│   │ Container App Job          │   │ Azure Files Mount       │   │
-│   │ (weekly schedule)          │──▶│ /mnt/scripts            │   │
-│   │ pwsh -File ...ps1          │   │ Invoke-MaesterContainer │   │
-│   │ MI: System-Assigned        │   │ Job.ps1                 │   │
-│   └──────┬─────────────────────┘   └─────────────────────────┘   │
-│          │                                                       │
-└──────────┼───────────────────────────────────────────────────────┘
-           │
-    ┌──────┼──────────────────────────────────────────────┐
-    │      ▼                                              │
-    │  ┌──────────┐  ┌──────────┐  ┌──────────┐           │
-    │  │ Graph    │  │ Storage  │  │ Web App  │ optional  │
-    │  │ + EXO    │  │ archive/ │  │ Easy Auth│           │
-    │  │ + Teams  │  │ latest/  │  │ portal   │           │
-    │  └──────────┘  └──────────┘  └──────────┘           │
-    │                                                     │
-    │  ┌──────────┐                                       │
-    │  │ ACR      │ optional (pre-built image)            │
-    │  └──────────┘                                       │
-    └─────────────────────────────────────────────────────┘
-```
+- No-ACR: pinned official bootstrap image → system managed identity → private `runtime/bundles/<sha256>.zip` → hash/size verification → isolated exact PowerShell engine and locked modules.
+- Optional ACR: digest-pinned custom image already contains the runner and locked runtime.
+- The job uses its system identity for Graph and optional EXO/Teams, private `archive`/`latest` report blobs, and the optional Web App portal. Neither mode mounts Azure Files.
+
+See [keyless delivery and migration gates](docs/keyless-runtime-migration.md). Existing deployments need an explicitly approved live and canonical-receipt migration; omission from incremental Bicep is not deletion.
 
 ## Script map
 
 - azd hooks: `scripts/Run-AzdPreUp.ps1`, `scripts/Run-AzdPreProvision.ps1`, `scripts/Run-AzdPostProvision.ps1`, `scripts/Run-AzdPreDown.ps1`, `scripts/Run-AzdPostDown.ps1`
 - Internal setup/validation: `scripts/Setup-PostDeploy.ps1`, `scripts/Invoke-JobValidation.ps1`
-- Container runner script (uploaded to Azure Files): `scripts/Invoke-MaesterContainerJob.ps1`
+- Container runner script (verified runtime bundle or packaged ACR image): `scripts/Invoke-MaesterContainerJob.ps1`
 - ACR image build: `scripts/Build-MaesterImage.ps1`, `Dockerfile`
 
 ## Runtime behavior
@@ -155,13 +135,13 @@ remain open under MCAJ-010. See [the qualification evidence](docs/drift-isolatio
 
 - Trigger mode defaults to `Schedule` (backward-compatible). To provision a job without scheduled assessments, run `azd env set JOB_TRIGGER_TYPE Manual` in the selected environment **before** `azd provision` or `azd up`. `infra/main.parameters.json` passes this setting to Bicep `jobTriggerType`; an unset value defaults to `Schedule`. Only exact `Manual` and `Schedule` values are allowed. Manual mode emits `manualTriggerConfig` and omits `scheduleTriggerConfig` entirely. The trigger setting itself does not start the job or change identity/permissions. **The existing azd postprovision hook still performs setup and explicitly starts a validation execution**, including in Manual mode; Manual is not an assessment-free deployment switch. Infrastructure-only validation must use the separately approved direct ARM/Bicep path with `jobTriggerType=Manual`, rather than running these hooks. Manual starts still require their own authorization. Existing executions are not canceled by changing the trigger. Before native validation, verify the deployed job's trigger is `Manual` and no schedule configuration remains. To restore the weekly trigger deliberately, use `azd env set JOB_TRIGGER_TYPE Schedule` and provision again. See the [Microsoft.App/jobs API contract](https://learn.microsoft.com/azure/templates/microsoft.app/2024-03-01/jobs).
 - Weekly schedule (Sunday midnight UTC) when `JOB_TRIGGER_TYPE=Schedule`. To run at a different time or frequency, edit the `cronExpression` in `infra/main.bicep` (e.g. `'30 6 * * 1'` for Monday 6:30 UTC), then re-run `azd provision`.
-- Without `IncludeACR`: the digest-pinned Microsoft .NET 10 Ubuntu Noble dependency image starts `/bin/sh /mnt/scripts/Start-MaesterContainerJob.sh nonacr`. Setup downloads the official PowerShell 7.6.6 Linux x64 archive, checks its pinned SHA-256, and uploads it alongside the runner to the existing Azure Files share. Each job copies and verifies the archive again, extracts into an owned local temporary directory, checks the engine, and invokes the maintained runner. No new registry or Azure resource is needed. The tradeoff is archive storage in the existing share and copy/extraction time at startup; the share's ordinary storage/transaction charges still apply.
-- With `IncludeACR`: the existing Dockerfile builds PowerShell 7.6.6 / .NET 10 from the same pinned dependency base and verified official archive, with locked modules pre-installed. The mounted bootstrap uses explicit `acr` mode and never installs a runtime or falls back. The public provisioning placeholder intentionally cannot execute an assessment: it fails before the runner until postprovision builds and applies the ACR image digest.
-- Missing files, download/hash/extraction/runtime/module failures stop execution. Bootstrap cleanup removes only its owned local temporary directory and leaves mounted source files untouched. Setup similarly removes only its own staging directory. ACR setup does not download or upload the runtime archive.
-- Hosted Linux x64 CI exercises the production non-ACR files and invocation: real runtime/module installation, exact five default imports, a subsequent offline run, corruption failures, ACR placeholder rejection, and source/temporary-file checks. It also builds the normal ACR image and checks its mounted invocation offline. The explicit `-ValidateRuntimeOnly` diagnostic stops after imports, before identity authentication; it does not run an assessment or publish a report.
-- These source/runtime checks do not qualify native Container App identity, report access, rollback, or cleanup. Issue [#26](https://github.com/nathanmcnulty/azd-maester-containerappjob/issues/26) and MCAJ-002 remain open for those separately authorized Azure gates.
-- Runtime provenance: [official PowerShell 7.6.6 release and checksums](https://github.com/PowerShell/PowerShell/releases/tag/v7.6.6). The archive hash and base digest stay aligned with the ACR Dockerfile; tests reject pin drift. Deprecated PowerShell public images and development-only SDK images are not used as the new production default.
-- Runner script is always mounted from Azure Files (never baked into image) for easy updates
+- Without `IncludeACR`: the digest-pinned official Azure PowerShell Ubuntu 24.04 image is only a bootstrap interpreter. System managed identity downloads a private content-addressed ZIP with externally pinned SHA-256 and size. After verification and safe extraction, that interpreter exits and the runner starts the separately verified exact PowerShell 7.6.6 / .NET 10 engine with isolated locked modules and writable HOME/XDG directories. No customer registry or Files mount is required. Blob storage/download and extraction costs still apply.
+- With `IncludeACR`: the Dockerfile installs the same exact PowerShell archive and locked modules, and packages executable runner content under `/opt/maester`. The provisioning placeholder fails closed until postprovision builds and applies the custom image digest. No runtime Blob upload is needed.
+- Missing inputs, authorization, hash, extraction, runtime or module failures stop execution. Owned temporary directories are removed on completion/cancellation; neither mode falls back to keys or SAS. Initial empty bundle pins fail closed until publication completes.
+- Hosted Linux x64 CI is configured to build the ACR image and qualify both runtime modes, including exact imports and negative tests. The explicit `-ValidateRuntimeOnly` diagnostic stops after imports, before identity authentication; it does not assess or publish. Local host tests do not prove those container checks have passed.
+- Native container qualification and approved Azure validation remain required for managed identity, report access, rollback and cleanup. Issue [#26](https://github.com/nathanmcnulty/azd-maester-containerappjob/issues/26) and MCAJ-002 remain open for those gates.
+- Runtime provenance: [official PowerShell 7.6.6 release and checksums](https://github.com/PowerShell/PowerShell/releases/tag/v7.6.6). The exact engine archive hash remains shared with the ACR Dockerfile. The bootstrap image is a different pinned base, not a qualified substitute for that assessment engine. Development-only SDK images are not the default.
+- Job roles are container-scoped: Reader on `runtime`, Contributor separately on `archive` and `latest`. Explicit setup consent covers the verified publishing operator's Contributor grant on `runtime`; no account key is retrieved.
 - Outputs:
   - `archive/maester-report-<timestamp>.html.gz`
   - `latest/latest.html`

@@ -70,11 +70,6 @@ subscription-scoped ARM lookup. The returned account ID, name, type and resource
 group must match the requested target. Setup passes its validated selectors to
 this actual publisher.
 
-Every Azure Files upload repeats the fresh canonical tenant/Enabled check and
-carries `--subscription`, in addition to the existing account/key binding. A
-subscription disabled during download produces no uploads; disabling it after
-one upload stops subsequent files. Already uploaded files are not rolled back.
-Archive SHA-256 verification and owned staging cleanup remain unchanged. The
-registered offline tests execute both the publisher and the real Setup call path
-with fail-closed transport doubles; native runtime and cleanup gates above remain
-owner-run work.
+Before each bounded publication attempt, the publisher rechecks canonical tenant/Enabled subscription context and obtains a token bound to the approved operator, tenant, audience and expiry. The canonical Blob endpoint uses direct Entra Bearer authorization, redirects disabled, and create-only publication; no storage CLI credential resolution is used. Existing conflicts require independent size/hash readback before acceptance. Job activation changes all external bundle pins in one template update after a fresh target/template read and verifies the resulting pins. The Jobs API has no documented ETag/CAS contract, so deployments must remain single-owner and serialized.
+
+Archive SHA-256 verification and owned staging cleanup remain. Native managed-identity runtime, report access and cleanup gates remain owner-run work. See [keyless migration constraints](keyless-runtime-migration.md) for retained legacy resources, broad grants and source-bound ownership receipts.

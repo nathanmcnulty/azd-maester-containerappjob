@@ -153,6 +153,9 @@ $resolvedResourceGroupName = if ($ResourceGroupName) { $ResourceGroupName } else
 
 . (Join-Path $PSScriptRoot 'Resolve-DeploymentTargets.ps1')
 $deploymentValues = Get-MaesterDeploymentValues -EnvironmentName $EnvironmentName -SubscriptionId $SubscriptionId -ResourceGroupName $resolvedResourceGroupName
+Import-Module (Join-Path $PSScriptRoot 'Maester-KeylessMigration.psm1') -Force
+Assert-MaesterKeylessProvisioning -SubscriptionId $SubscriptionId -TenantId $TenantId `
+  -ResourceGroupName $resolvedResourceGroupName -EnvironmentName $EnvironmentName
 $targets = Resolve-MaesterDeploymentTargets -EnvironmentValues $deploymentValues -SubscriptionId $SubscriptionId -ResourceGroupName $resolvedResourceGroupName -EnvironmentName $EnvironmentName -SolutionName 'container-app-job' -GetResource {
   param($path)
   Invoke-RestMethod -Method GET -Uri "https://management.azure.com$path" -Headers $armHeaders
@@ -171,6 +174,8 @@ $containerAppJobName = [string]$containerAppJob.name
 $principalId = [string]$containerAppJob.identity.principalId
 
 function Assert-CurrentSetupTargets {
+  Assert-MaesterKeylessProvisioning -SubscriptionId $SubscriptionId -TenantId $TenantId `
+    -ResourceGroupName $resolvedResourceGroupName -EnvironmentName $EnvironmentName
   $null = Get-AzCliSubscriptionContext -SubscriptionId $SubscriptionId -TenantId $TenantId
   $current = Resolve-MaesterDeploymentTargets -EnvironmentValues $deploymentValues -SubscriptionId $SubscriptionId -ResourceGroupName $resolvedResourceGroupName -EnvironmentName $EnvironmentName -SolutionName 'container-app-job' -GetResource {
     param($path)
@@ -219,7 +224,9 @@ if ($IncludeExchange) {
   if ($domains.Count -ne 1) { throw 'Exactly one initial tenant domain is required to inspect Exchange access.' }
   Connect-ExchangeOnlineSilent -Organization $domains[0].name -TenantId $TenantId
 }
+$includeACR = ConvertTo-BoolOrDefault -Value $env:INCLUDE_ACR -Default $false
 $accessPlanParameters = @{
+  IncludeACR = $includeACR
   TenantId = $TenantId; SubscriptionId = $SubscriptionId; PrincipalObjectId = $principalId
   ResourceId = $containerAppJob.id; StorageAccount = $storageAccount; WebApp = $webApp; ArmHeaders = $armHeaders
   SecurityGroupObjectId = $SecurityGroupObjectId; SecurityGroupDisplayName = $SecurityGroupDisplayName
@@ -276,19 +283,15 @@ try {
   }
 
   # ──────────────────────────────────────────────
-  # Upload runner script to Azure Files share
-  # ──────────────────────────────────────────────
-
-  $storageAccountName = $storageAccount.name
-  $storageKeyPath = "/subscriptions/$SubscriptionId/resourceGroups/$resolvedResourceGroupName/providers/Microsoft.Storage/storageAccounts/$storageAccountName/listKeys?api-version=2023-05-01"
-  $storageKeysResponse = Invoke-RestMethod -Method POST -Uri "https://management.azure.com$storageKeyPath" -Headers $armHeaders -Body '{}' -ContentType 'application/json'
-  $storageKey = $storageKeysResponse.keys[0].value
-
-  $includeACR = ConvertTo-BoolOrDefault -Value $env:INCLUDE_ACR -Default $false
-  Import-Module (Join-Path $PSScriptRoot 'Maester-RuntimeFiles.psm1') -Force
-  Publish-MaesterRuntimeFiles -SubscriptionId $SubscriptionId -TenantId $TenantId -ResourceGroupName $resolvedResourceGroupName -StorageAccountName $storageAccountName -StorageKey $storageKey -ProjectRoot $projectRoot -IncludeACR:$includeACR
-
-  Write-Host "Uploaded locked runner files to Azure Files share 'scripts/$storageAccountName'."
+  # Publish private immutable runtime bundle using the approved operator's Entra token.
+  # ACR images contain their own runner and do not need a runtime Blob upload.
+  if (-not $includeACR) {
+    Assert-CurrentSetupTargets
+    Import-Module (Join-Path $PSScriptRoot 'Maester-RuntimeFiles.psm1') -Force
+    $bundle = Publish-MaesterRuntimeFiles -SubscriptionId $SubscriptionId -TenantId $TenantId -ResourceGroupName $resolvedResourceGroupName -StorageAccountName $storageAccount.name -OperatorObjectId $accessPlan.details.inventory.operator.id -ProjectRoot $projectRoot
+    Set-MaesterRuntimeBundlePin -SubscriptionId $SubscriptionId -TenantId $TenantId -ResourceGroupName $resolvedResourceGroupName -JobName $containerAppJobName -RuntimePrincipalId $principalId -OperatorObjectId $accessPlan.details.inventory.operator.id -Bundle $bundle
+    Write-Host "Published and verified runtime bundle $($bundle.Sha256)."
+  }
 
   # ──────────────────────────────────────────────
   # Optional: Build and push ACR image

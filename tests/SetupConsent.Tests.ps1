@@ -39,7 +39,7 @@ Describe 'Reviewed deployment setup access (offline)' {
         ResourceId = '/subscriptions/11111111-1111-4111-8111-111111111111/resourceGroups/rg-test/providers/Microsoft.App/jobs/job-test'
         StorageAccount = [pscustomobject]@{ id = '/subscriptions/11111111-1111-4111-8111-111111111111/resourceGroups/rg-test/providers/Microsoft.Storage/storageAccounts/storage'; name = 'storage' }
         ArmHeaders = @{ Authorization = 'offline-only' }; PermissionProfile = 'Full'
-        IncludeMailSend = $false; IncludeReportSettingsWrite = $false
+        IncludeACR = $true; IncludeMailSend = $false; IncludeReportSettingsWrite = $false
       }
       # Scope fake script resolution to the planner and its apply path.
       Mock Join-Path {
@@ -160,6 +160,37 @@ else { $plan }
     Remove-Variable setupGrantFixture, setupGraphApplied -Scope Global -ErrorAction SilentlyContinue
   }
   AfterAll { Remove-Module Maester-SetupConsent, Maester-ConsentPlan -Force -ErrorAction SilentlyContinue }
+
+  It 'requires reviewed runtime-container-only publisher consent for non-ACR' {
+    InModuleScope Maester-SetupConsent {
+      $parameters.IncludeACR = $false
+      $plan = Get-MaesterSetupAccessPlan @parameters
+      $publisher = @($plan.details.operations | Where-Object category -eq StorageRuntimePublisher)
+      $publisher.Count | Should -Be 1
+      $publisher[0].uri | Should -BeLike '*/blobServices/default/containers/runtime/providers/Microsoft.Authorization/roleAssignments/*'
+      $publisher[0].body.properties.principalId | Should -BeExactly $testState.user
+      $publisher[0].body.properties.roleDefinitionId | Should -BeLike '*/ba92f5b4-2d11-453d-a403-e96b0029c9fe'
+      $plan.details.includeACR | Should -BeFalse
+      $testState.operations.Count | Should -Be 0
+      $parameters.IncludeACR = $true
+      $acrPlan = Get-MaesterSetupAccessPlan @parameters
+      @($acrPlan.details.operations | Where-Object category -eq StorageRuntimePublisher).Count | Should -Be 0
+      $acrPlan.planHash | Should -Not -BeExactly $plan.planHash
+    }
+  }
+
+  It 'journals the approved runtime publisher grant at its exact container scope' {
+    InModuleScope Maester-SetupConsent {
+      $parameters.IncludeACR = $false
+      $plan = Get-MaesterSetupAccessPlan @parameters
+      $null = Invoke-MaesterSetupAccessPlan -PlanParameters $parameters -ApprovedPlanHash $plan.planHash -OwnershipSession $global:setupOwnershipSession
+      $records = @((Get-MaesterOwnershipJournal -Session $global:setupOwnershipSession).records | Where-Object { $_.kind -eq 'AzureRoleAssignment' -and $_.expected.scope -like '*/containers/runtime' })
+      $records.Count | Should -Be 1
+      $records[0].state | Should -BeExactly 'applied'
+      $records[0].expected.principalId | Should -BeExactly $testState.user
+      $records[0].exactIds.roleAssignmentId | Should -BeLike '*/containers/runtime/providers/Microsoft.Authorization/roleAssignments/*'
+    }
+  }
 
   It 'plans concrete categorized grants with no writes and a stable hash' {
     InModuleScope Maester-SetupConsent {

@@ -1,229 +1,131 @@
 BeforeAll {
   $repoRoot = Split-Path $PSScriptRoot -Parent
   Import-Module (Join-Path $repoRoot 'scripts/Maester-RuntimeFiles.psm1') -Force
-  $savedAz = (Get-Command az -CommandType Function -ErrorAction SilentlyContinue).ScriptBlock
   function global:az {
-    $a = @($args); $s = $global:PublisherTest; $global:LASTEXITCODE = 0
-    $s.Calls.Add(($a -join ' '))
-    if ($a[0] -eq 'account') { throw 'Global account/default access is forbidden.' }
-    if ('--subscription' -notin $a -or $a[([array]::IndexOf($a, '--subscription') + 1)] -ne $s.Sub) { throw 'Unscoped transport.' }
-    if ($a[0] -eq 'rest') {
-      if ($s.MetadataFailure) { $global:LASTEXITCODE = 1; return '' }
-      if ($s.Malformed) { return '{invalid' }
-      return ($s.Metadata | ConvertTo-Json -Compress)
-    }
-    if (($a[0..2] -join ' ') -eq 'storage account show') {
-      if ($s.StorageFailure) { $global:LASTEXITCODE = 1; return '' }
-      if ($s.StorageMalformed) { return '{invalid' }
-      if ($a[([array]::IndexOf($a, '--resource-group') + 1)] -ne 'selected-group' -or
-          $a[([array]::IndexOf($a, '--name') + 1)] -ne 'test') { throw 'Wrong storage lookup.' }
-      return ($s.Storage | ConvertTo-Json -Compress)
-    }
-    if (($a[0..2] -join ' ') -eq 'storage file upload') {
-      $s.Calls[$s.Calls.Count - 2] | Should -BeLike 'rest *'
-      $s.Uploads.Add($a)
-      '--account-key' | Should -Not -BeIn $a
-      ($a -join ' ') | Should -Not -Match 'fixture-secret-key'
-      $env:AZURE_STORAGE_KEY | Should -BeExactly $s.ExpectedKey
-      [Environment]::GetEnvironmentVariables('Process').Contains('AZURE_STORAGE_CONNECTION_STRING') | Should -BeTrue
-      [Environment]::GetEnvironmentVariable('AZURE_STORAGE_CONNECTION_STRING', 'Process') | Should -BeExactly ''
-      $a[([array]::IndexOf($a, '--account-name') + 1)] | Should -BeExactly 'test'
-      $a[([array]::IndexOf($a, '--auth-mode') + 1)] | Should -BeExactly 'key'
-      if ($s.CheckChild) {
-        & python3 (Join-Path $repoRoot 'tests/fixtures/check-upload-environment.py') @a
-        $LASTEXITCODE | Should -Be 0
-      }
-      if ($s.ThrowUpload) { throw 'invocation diagnostic fixture-secret-key' }
-      if ($s.DisableAfterUpload) { $s.Metadata.state = 'Disabled' }
-      $global:LASTEXITCODE = $s.UploadExit
-      return
-    }
-    throw 'Unexpected offline transport.'
+    $global:LASTEXITCODE = 0
+    if (($args[0..2] -join ' ') -eq 'storage account show') { return ($global:RuntimeTest.Storage | ConvertTo-Json -Compress) }
+    if (($args[0..1] -join ' ') -eq 'account get-access-token') { return $global:RuntimeTest.Token }
+    throw 'Unexpected external command.'
   }
 }
-AfterAll { Remove-Item Function:\az -ErrorAction SilentlyContinue; if ($savedAz) { Set-Item function:global:az $savedAz }; Remove-Variable PublisherTest -Scope Global }
-
-Describe 'Production runtime staging and uploads' {
+AfterAll { Remove-Item Function:\az; Remove-Variable RuntimeTest -Scope Global }
+Describe 'Content-addressed keyless runtime publisher' {
   BeforeEach {
-    $sub = '11111111-1111-4111-8111-111111111111'; $tenant = '22222222-2222-4222-8222-222222222222'
-    $script:target = @{ SubscriptionId = $sub; TenantId = $tenant; ResourceGroupName = 'selected-group' }
-    $global:PublisherTest = @{
-      Sub = $sub; MetadataFailure = $false; Malformed = $false; StorageFailure = $false; StorageMalformed = $false
-      ExpectedKey = 'fixture'; CheckChild = $false; ThrowUpload = $false; UploadExit = 0; DisableAfterUpload = $false; Calls = [Collections.Generic.List[string]]::new(); Uploads = [Collections.Generic.List[object]]::new()
-      Metadata = @{ id = "/subscriptions/$sub"; subscriptionId = $sub; tenantId = $tenant; displayName = 'Selected'; state = 'Enabled' }
-      Storage = @{ id = "/subscriptions/$sub/resourceGroups/selected-group/providers/Microsoft.Storage/storageAccounts/test"; name = 'test'; type = 'Microsoft.Storage/storageAccounts'; resourceGroup = 'selected-group' }
+    $global:RuntimeTest = @{
+      Storage = @{ id = '/subscriptions/11111111-1111-4111-8111-111111111111/resourceGroups/test/providers/Microsoft.Storage/storageAccounts/teststorage'; name = 'teststorage'; type = 'Microsoft.Storage/storageAccounts'; resourceGroup = 'test'; allowSharedKeyAccess = $false }
+      Token = 'not-used'
     }
-    $script:before = @(Get-ChildItem ([IO.Path]::GetTempPath()) -Directory -Filter 'maester-upload-*' | Select-Object -ExpandProperty FullName)
-    $script:sourceHash = (Get-FileHash (Join-Path $repoRoot 'runtime-packages.lock.json')).Hash
-  }
-  AfterEach {
-    @(Get-ChildItem ([IO.Path]::GetTempPath()) -Directory -Filter 'maester-upload-*' | Select-Object -ExpandProperty FullName | Where-Object { $_ -notin $script:before }).Count | Should -Be 0
-    (Get-FileHash (Join-Path $repoRoot 'runtime-packages.lock.json')).Hash | Should -Be $script:sourceHash
-  }
-
-  It 'uploads every production non-ACR input and removes only owned staging' {
-    Mock Invoke-WebRequest -ModuleName Maester-RuntimeFiles { param($Uri, $OutFile) Set-Content -LiteralPath $OutFile -Value 'download fixture' }
-    Mock Get-FileHash -ModuleName Maester-RuntimeFiles { @{ Hash = 'DDBC4A2D113BBD46D283CFEDCBCD117A70CAEFD7673F41F2B4E0000BADF103BC' } }
-    Publish-MaesterRuntimeFiles @target -StorageAccountName test -StorageKey fixture -ProjectRoot $repoRoot
-    $global:PublisherTest.Uploads.Count | Should -Be 8
-    foreach ($file in @('Invoke-MaesterContainerJob.ps1', 'Maester.DriftInputs.psm1', 'Maester.DriftRun.psm1', 'Install-LockedModules.ps1', 'Start-MaesterContainerJob.sh', 'runtime-packages.lock.json', 'powershell-7.6.6-linux-x64.tar.gz')) {
-      @($global:PublisherTest.Uploads | Where-Object { $file -in $_ }).Count | Should -Be 1
+    $script:target = @{ SubscriptionId = '11111111-1111-4111-8111-111111111111'; TenantId = '22222222-2222-4222-8222-222222222222'; ResourceGroupName = 'test'; StorageAccountName = 'teststorage'; OperatorObjectId = '33333333-3333-4333-8333-333333333333' }
+    Mock Get-AzCliSubscriptionContext -ModuleName Maester-RuntimeFiles { @{ id = $SubscriptionId; tenantId = $TenantId } }
+    Mock Get-MaesterPublisherToken -ModuleName Maester-RuntimeFiles { 'fixture-token' }
+    Mock New-MaesterRuntimeStaging -ModuleName Maester-RuntimeFiles {
+      $dir = Join-Path $TestDrive ([guid]::NewGuid().ToString()); New-Item -ItemType Directory $dir | Out-Null
+      Set-Content (Join-Path $dir 'runner') 'verified test'; @{ Path = $dir; Files = @('runner') }
     }
-    Should -Invoke Invoke-WebRequest -ModuleName Maester-RuntimeFiles -Times 1 -Exactly -ParameterFilter { $Uri -eq 'https://github.com/PowerShell/PowerShell/releases/download/v7.6.6/powershell-7.6.6-linux-x64.tar.gz' }
+    Mock Invoke-MaesterBlobRequest -ModuleName Maester-RuntimeFiles { if ($Method -eq 'PUT') { 201 } else { 200 } }
   }
-
-  It 'does not download or upload a runtime archive for ACR' {
-    Mock Invoke-WebRequest -ModuleName Maester-RuntimeFiles { throw 'ACR must not download.' }
-    Publish-MaesterRuntimeFiles @target -StorageAccountName test -StorageKey fixture -ProjectRoot $repoRoot -IncludeACR
-    $global:PublisherTest.Uploads.Count | Should -Be 7
-    Should -Invoke Invoke-WebRequest -ModuleName Maester-RuntimeFiles -Times 0 -Exactly
+  It 'publishes a canonical hash path and independently reads it back' {
+    $result = Publish-MaesterRuntimeFiles @target
+    $result.BlobName | Should -BeExactly "bundles/$($result.Sha256).zip"
+    $result.Sha256 | Should -Match '^[a-f0-9]{64}$'
+    $result.Size | Should -BeGreaterThan 0
+    Should -Invoke Invoke-MaesterBlobRequest -ModuleName Maester-RuntimeFiles -Times 1 -Exactly -ParameterFilter { $Method -eq 'PUT' -and $Uri.Host -eq 'teststorage.blob.core.windows.net' -and $Uri.AbsolutePath -match '^/runtime/bundles/[a-f0-9]{64}.zip$' -and $Token -eq 'fixture-token' }
+    Should -Invoke Invoke-MaesterBlobRequest -ModuleName Maester-RuntimeFiles -Times 1 -Exactly -ParameterFilter { $Method -eq 'GET' }
   }
-
-  It 'rejects download failure before any upload and cleans temporary data' {
-    Mock Invoke-WebRequest -ModuleName Maester-RuntimeFiles { param($OutFile) Set-Content $OutFile partial; throw 'download failed' }
-    { Publish-MaesterRuntimeFiles @target -StorageAccountName test -StorageKey fixture -ProjectRoot $repoRoot } | Should -Throw '*download failed*'
-    $global:PublisherTest.Uploads.Count | Should -Be 0
+  It 'verifies a pre-existing immutable blob rather than overwriting it' {
+    Mock Invoke-MaesterBlobRequest -ModuleName Maester-RuntimeFiles { if ($Method -eq 'PUT') { 412 } else { 200 } }
+    $null = Publish-MaesterRuntimeFiles @target
+    Should -Invoke Invoke-MaesterBlobRequest -ModuleName Maester-RuntimeFiles -Times 2 -Exactly
   }
-
-  It 'rejects actual wrong archive bytes before any upload' {
-    Mock Invoke-WebRequest -ModuleName Maester-RuntimeFiles { param($OutFile) Set-Content $OutFile corrupt }
-    { Publish-MaesterRuntimeFiles @target -StorageAccountName test -StorageKey fixture -ProjectRoot $repoRoot } | Should -Throw '*SHA-256*'
-    $global:PublisherTest.Uploads.Count | Should -Be 0
+  It 'fails an existing blob whose readback does not verify' {
+    Mock Invoke-MaesterBlobRequest -ModuleName Maester-RuntimeFiles { if ($Method -eq 'PUT') { 409 } else { throw 'readback mismatch' } }
+    { Publish-MaesterRuntimeFiles @target } | Should -Throw '*readback mismatch*'
   }
-
-  It 'fails closed on an upload failure and cleans its staged copies' {
-    $global:PublisherTest.UploadExit = 7
-    { Publish-MaesterRuntimeFiles @target -StorageAccountName test -StorageKey fixture -ProjectRoot $repoRoot -IncludeACR } | Should -Throw '*Failed to upload*'
-    $global:PublisherTest.Uploads.Count | Should -Be 1
+  It 'rejects mismatched or key-enabled account before staging: <Property>' -ForEach @(@{Property='id'; Value='wrong'}, @{Property='name';Value='wrong'}, @{Property='type';Value='wrong'}, @{Property='resourceGroup';Value='wrong'}, @{Property='allowSharedKeyAccess';Value=$true}) {
+    $global:RuntimeTest.Storage[$Property] = $Value
+    { Publish-MaesterRuntimeFiles @target } | Should -Throw '*keyless target*'
+    Should -Invoke New-MaesterRuntimeStaging -ModuleName Maester-RuntimeFiles -Times 0 -Exactly
   }
-
-
-  It 'restores <KeyState>/<ConnectionState> credentials after <Outcome> without exposing them' -ForEach @(
-    foreach ($keyState in 'absent','empty','populated') {
-      foreach ($connectionState in 'absent','empty','populated') {
-        foreach ($outcome in 'success','nonzero','throw','guard') {
-          @{ KeyState = $keyState; ConnectionState = $connectionState; Outcome = $outcome }
-        }
-      }
-    }
-  ) {
-    $names = @('AZURE_STORAGE_KEY','AZURE_STORAGE_CONNECTION_STRING','AZURE_STORAGE_AUTH_MODE','AZURE_CONFIG_DIR')
-    $saved = @{}; foreach ($name in $names) { $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
-    try {
-      $values = @{ absent = $null; empty = ''; populated = 'prior-credential' }
-      foreach ($pair in @(@($names[0],$KeyState), @($names[1],$ConnectionState))) {
-        if ($pair[1] -eq 'absent') { Remove-Item ('Env:' + $pair[0]) -ErrorAction SilentlyContinue }
-        else { [Environment]::SetEnvironmentVariable($pair[0], $values[$pair[1]], 'Process') }
-      }
-      $env:AZURE_STORAGE_AUTH_MODE = 'login'
-      $env:AZURE_CONFIG_DIR = Join-Path $TestDrive 'conflicting-config'
-      New-Item -ItemType Directory -Path $env:AZURE_CONFIG_DIR -Force | Out-Null
-      Set-Content (Join-Path $env:AZURE_CONFIG_DIR config) "[storage]`nconnection_string=AccountName=wrongaccount;AccountKey=wrong-key`nauth_mode=login`naccount=wrongaccount`nkey=wrong-key"
-      $global:PublisherTest.ExpectedKey = 'fixture-secret-key'
-      $global:PublisherTest.CheckChild = $true
-      $global:PublisherTest.UploadExit = $(if ($Outcome -eq 'nonzero') { 7 } else { 0 })
-      $global:PublisherTest.ThrowUpload = $Outcome -eq 'throw'
-      $global:PublisherTest.DisableAfterUpload = $Outcome -eq 'guard'
-      $diagnostics = @()
-      try {
-        $diagnostics = @(Publish-MaesterRuntimeFiles @target -StorageAccountName test -StorageKey fixture-secret-key -ProjectRoot $repoRoot -IncludeACR *>&1)
-        $Outcome | Should -BeExactly 'success'
-      }
-      catch {
-        $Outcome | Should -Not -BeExactly 'success'
-        $diagnostics += $_
-        if ($Outcome -ne 'guard') { $_.Exception.Message | Should -BeLike 'Failed to upload*' }
-      }
-      ($diagnostics | Out-String) | Should -Not -Match 'fixture-secret-key|wrong-key|prior-credential'
-      ($global:PublisherTest.Calls -join "`n") | Should -Not -Match 'fixture-secret-key|wrong-key|prior-credential|--account-key'
-      $global:PublisherTest.Uploads.Count | Should -Be $(if ($Outcome -eq 'success') { 7 } else { 1 })
-      foreach ($pair in @(@($names[0],$KeyState), @($names[1],$ConnectionState))) {
-        $current = [Environment]::GetEnvironmentVariable($pair[0], 'Process')
-        $current | Should -BeExactly $values[$pair[1]]
-        [Environment]::GetEnvironmentVariables('Process').Contains($pair[0]) | Should -Be ($pair[1] -ne 'absent')
-      }
-      $env:AZURE_STORAGE_AUTH_MODE | Should -BeExactly 'login'
-    }
-    finally { foreach ($name in $names) {
-      if ($null -eq $saved[$name]) { Remove-Item ('Env:' + $name) -ErrorAction SilentlyContinue }
-      else { [Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process') }
-    } }
+  It 'does not fall back after bounded role propagation retries' {
+    Mock Invoke-MaesterBlobRequest -ModuleName Maester-RuntimeFiles { 403 }
+    Mock Start-Sleep -ModuleName Maester-RuntimeFiles {}
+    { Publish-MaesterRuntimeFiles @target } | Should -Throw '*HTTP 403*'
+    Should -Invoke Invoke-MaesterBlobRequest -ModuleName Maester-RuntimeFiles -Times 7 -Exactly
+    Should -Invoke Start-Sleep -ModuleName Maester-RuntimeFiles -Times 6 -Exactly
   }
-
-  It 'rejects invalid target or metadata before staging: <Case>' -ForEach @(
-    @{ Case = 'wrong tenant' }, @{ Case = 'wrong subscription' }, @{ Case = 'disabled' }, @{ Case = 'missing state' },
-    @{ Case = 'missing tenant' }, @{ Case = 'malformed subscription' }, @{ Case = 'failed subscription' },
-    @{ Case = 'storage id' }, @{ Case = 'storage name' }, @{ Case = 'storage type' }, @{ Case = 'storage group' },
-    @{ Case = 'failed storage' }, @{ Case = 'malformed storage' }, @{ Case = 'blank tenant' }, @{ Case = 'blank group' }, @{ Case = 'blank subscription' }, @{ Case = 'invalid group' }
-  ) {
-    switch ($Case) {
-      'wrong tenant' { $global:PublisherTest.Metadata.tenantId = '33333333-3333-4333-8333-333333333333' }
-      'wrong subscription' { $global:PublisherTest.Metadata.subscriptionId = '33333333-3333-4333-8333-333333333333' }
-      'disabled' { $global:PublisherTest.Metadata.state = 'Disabled' }
-      'missing state' { $global:PublisherTest.Metadata.Remove('state') }
-      'missing tenant' { $global:PublisherTest.Metadata.Remove('tenantId') }
-      'malformed subscription' { $global:PublisherTest.Malformed = $true }
-      'failed subscription' { $global:PublisherTest.MetadataFailure = $true }
-      'storage id' { $global:PublisherTest.Storage.id = '/subscriptions/wrong/resourceGroups/wrong' }
-      'storage name' { $global:PublisherTest.Storage.name = 'wrong' }
-      'storage type' { $global:PublisherTest.Storage.type = 'Microsoft.Web/sites' }
-      'storage group' { $global:PublisherTest.Storage.resourceGroup = 'wrong' }
-      'failed storage' { $global:PublisherTest.StorageFailure = $true }
-      'malformed storage' { $global:PublisherTest.StorageMalformed = $true }
-      'blank tenant' { $target.TenantId = ' ' }
-      'blank group' { $target.ResourceGroupName = ' ' }
-      'blank subscription' { $target.SubscriptionId = ' ' }
-      'invalid group' { $target.ResourceGroupName = '../other' }
-    }
-    Mock Invoke-WebRequest -ModuleName Maester-RuntimeFiles { throw 'Must never download.' }
-    { Publish-MaesterRuntimeFiles @target -StorageAccountName test -StorageKey fixture -ProjectRoot $repoRoot } | Should -Throw
-    $global:PublisherTest.Uploads.Count | Should -Be 0
-    Should -Invoke Invoke-WebRequest -ModuleName Maester-RuntimeFiles -Times 0 -Exactly
+  It 'does not retry permanent HTTP failures or follow redirects' {
+    Mock Invoke-MaesterBlobRequest -ModuleName Maester-RuntimeFiles { 302 }
+    { Publish-MaesterRuntimeFiles @target } | Should -Throw '*HTTP 302*'
+    Should -Invoke Invoke-MaesterBlobRequest -ModuleName Maester-RuntimeFiles -Times 1 -Exactly
   }
-
-  It 'refreshes state after download before the first upload' {
-    Mock Invoke-WebRequest -ModuleName Maester-RuntimeFiles { param($OutFile) Set-Content $OutFile fixture; $global:PublisherTest.Metadata.state = 'Disabled' }
-    Mock Get-FileHash -ModuleName Maester-RuntimeFiles { @{ Hash = 'DDBC4A2D113BBD46D283CFEDCBCD117A70CAEFD7673F41F2B4E0000BADF103BC' } }
-    { Publish-MaesterRuntimeFiles @target -StorageAccountName test -StorageKey fixture -ProjectRoot $repoRoot } | Should -Throw '*Enabled*'
-    $global:PublisherTest.Uploads.Count | Should -Be 0
+  It 'makes deterministic archives despite file timestamp changes' {
+    $dir = Join-Path $TestDrive 'deterministic'; New-Item -ItemType Directory $dir | Out-Null; Set-Content (Join-Path $dir 'a') 'fixed bytes'
+    $first = New-MaesterRuntimeBundle -Staging @{ Path = $dir; Files = @('a') }
+    Remove-Item $first.Path
+    (Get-Item (Join-Path $dir 'a')).LastWriteTime = [DateTime]::Now.AddDays(-1)
+    $second = New-MaesterRuntimeBundle -Staging @{ Path = $dir; Files = @('a') }
+    $second.Sha256 | Should -BeExactly $first.Sha256
   }
-
-  It 'stops after one upload when state changes between files' {
-    $global:PublisherTest.DisableAfterUpload = $true
-    { Publish-MaesterRuntimeFiles @target -StorageAccountName test -StorageKey fixture -ProjectRoot $repoRoot -IncludeACR } | Should -Throw '*Enabled*'
-    $global:PublisherTest.Uploads.Count | Should -Be 1
-  }
-
-  It 'uses the real publisher in setup and the shell entry point in Bicep' {
-    $setup = Get-Content (Join-Path $repoRoot 'scripts/Setup-PostDeploy.ps1') -Raw
-    $setup | Should -Match 'Publish-MaesterRuntimeFiles .*?-StorageAccountName.*-IncludeACR:\$includeACR'
-    $infra = Get-Content (Join-Path $repoRoot 'infra/main.bicep') -Raw
-    $infra | Should -Match "'/bin/sh'\s+'/mnt/scripts/Start-MaesterContainerJob.sh'\s+includeACR \? 'acr' : 'nonacr'"
-    $docker = Get-Content (Join-Path $repoRoot 'Dockerfile') -Raw
-    $bootstrap = Get-Content (Join-Path $repoRoot 'scripts/Start-MaesterContainerJob.sh') -Raw
-    $staging = Get-Content (Join-Path $repoRoot 'scripts/Maester-RuntimeFiles.psm1') -Raw
-    $hash = [regex]::Match($docker, '[A-F0-9]{64}').Value
-    $hash | Should -Not -BeNullOrEmpty
-    $bootstrap | Should -Match $hash
-    $staging | Should -Match $hash
-    $infra | Should -Match ([regex]::Escape(([regex]::Match($docker, 'mcr.microsoft.com/[^\s]+')).Value))
+  It 'contains no key/SAS credential resolution or moving manifest path' {
+    $source = Get-Content (Join-Path $repoRoot 'scripts/Maester-RuntimeFiles.psm1') -Raw
+    $source | Should -Not -Match 'StorageKey|listKeys|AZURE_STORAGE_KEY|storage file upload|--auth-mode key'
+    $source | Should -Match 'AllowAutoRedirect = \$false'
+    $source | Should -Match "'If-None-Match', '\*'"
+    $source | Should -Not -Match 'latest\.json'
   }
 }
-
-Describe 'Hosted runtime harness exit state' {
-  It 'clears the expected negative-test native exit only on successful completion' {
-    $source = Get-Content (Join-Path $repoRoot 'scripts/Test-NonAcrContainerRuntime.ps1') -Raw
-    $source.TrimEnd() | Should -Match '\$global:LASTEXITCODE = 0$'
-    $source.LastIndexOf('$global:LASTEXITCODE = 0') | Should -BeGreaterThan $source.LastIndexOf('Remove-Item -LiteralPath $owned')
-    $success = Join-Path $TestDrive 'success.ps1'
-    $failure = Join-Path $TestDrive 'failure.ps1'
-    $reset = ($source.TrimEnd() -split "`n")[-1]
-    $wrapper = "`nif (Test-Path variable:LASTEXITCODE) { exit `$LASTEXITCODE }"
-    Set-Content $success -Value ("`$ErrorActionPreference = 'Stop'`n& /bin/sh -c 'exit 17'`n" + $reset + $wrapper)
-    & pwsh -NoProfile -File $success
-    $LASTEXITCODE | Should -Be 0
-    Set-Content $failure -Value ("`$ErrorActionPreference = 'Stop'`n& /bin/sh -c 'exit 17'`nthrow 'assertion failed'`n" + $reset + $wrapper)
-    & pwsh -NoProfile -File $failure 2>&1 | Out-Null
-    $LASTEXITCODE | Should -Be 1
+Describe 'Verified operator tokens' {
+  BeforeEach {
+    Mock Get-AzCliSubscriptionContext -ModuleName Maester-RuntimeFiles { @{} }
+    $global:RuntimeTest = @{ Token = '' }
+  }
+  It 'binds token to tenant, operator, resource, and expiry: <Case>' -ForEach @(@{Case='valid'}, @{Case='tenant'}, @{Case='operator'}, @{Case='audience'}, @{Case='expiry'}, @{Case='malformed'}) {
+    $claims = @{ tid = 'tenant'; oid = 'operator'; aud = 'https://storage.azure.com'; exp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() + 3600 }
+    switch ($Case) { tenant { $claims.tid='other' }; operator { $claims.oid='other' }; audience { $claims.aud='https://graph.microsoft.com' }; expiry { $claims.exp=1 } }
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($claims | ConvertTo-Json -Compress))).TrimEnd('=').Replace('+','-').Replace('/','_')
+    $global:RuntimeTest.Token = "header.$encoded.signature"
+    if ($Case -eq 'malformed') { $global:RuntimeTest.Token = 'bad' }
+    if ($Case -eq 'valid') { & (Get-Module Maester-RuntimeFiles) { Get-MaesterPublisherToken -SubscriptionId sub -TenantId tenant -OperatorObjectId operator } | Should -BeExactly $global:RuntimeTest.Token }
+    else { { & (Get-Module Maester-RuntimeFiles) { Get-MaesterPublisherToken -SubscriptionId sub -TenantId tenant -OperatorObjectId operator } } | Should -Throw '*approved publishing operator*' }
+  }
+}
+Describe 'Coherent job template activation' {
+  BeforeEach {
+    $script:pinTarget = @{ SubscriptionId='11111111-1111-4111-8111-111111111111'; TenantId='22222222-2222-4222-8222-222222222222'; OperatorObjectId='33333333-3333-4333-8333-333333333333'; RuntimePrincipalId='44444444-4444-4444-8444-444444444444'; ResourceGroupName='test'; JobName='job'; Bundle=@{StorageAccountName='teststorage'; Sha256=('a'*64); BlobName=('bundles/'+('a'*64)+'.zip');Size=100} }
+    $global:RuntimeTest = @{ Gets=0; Body=$null; Changed=$false; WrongPrincipal=$false; WrongReadback=$false }
+    Mock Get-AzCliSubscriptionContext -ModuleName Maester-RuntimeFiles { @{} }
+    Mock Get-MaesterPublisherToken -ModuleName Maester-RuntimeFiles { 'fixture-token' }
+    Mock Invoke-RestMethod -ModuleName Maester-RuntimeFiles {
+      if ($Method -eq 'PATCH') { $global:RuntimeTest.Body = $Body | ConvertFrom-Json; return }
+      $global:RuntimeTest.Gets++
+      $template = if ($global:RuntimeTest.Body) { $global:RuntimeTest.Body.properties.template } else { [pscustomobject]@{ containers = @([pscustomobject]@{ name='maester'; image='pinned'; env=@(@{name='UNRELATED';value='preserve'}); resources=@{cpu=1} }); volumes=@() } }
+      if ($global:RuntimeTest.Changed -and $global:RuntimeTest.Gets -eq 2) { $template.containers[0].image = 'changed' }
+      if ($global:RuntimeTest.WrongReadback -and $global:RuntimeTest.Gets -eq 3) { $template.containers[0].env=@() }
+      @{id='/subscriptions/11111111-1111-4111-8111-111111111111/resourceGroups/test/providers/Microsoft.App/jobs/job';identity=@{principalId=$(if ($global:RuntimeTest.WrongPrincipal) {'wrong'} else {'44444444-4444-4444-8444-444444444444'})};properties=@{template=$template} }
+    }
+  }
+  It 'sets all pins in one PATCH, preserving unrelated values, with readback' {
+    Set-MaesterRuntimeBundlePin @pinTarget
+    $global:RuntimeTest.Gets | Should -Be 3
+    $envs = $global:RuntimeTest.Body.properties.template.containers[0].env
+    @($envs).Count | Should -Be 5
+    ($envs | Where-Object name -EQ UNRELATED).value | Should -BeExactly 'preserve'
+    ($envs | Where-Object name -EQ MAESTER_RUNTIME_SHA256).value | Should -BeExactly ('a'*64)
+    Should -Invoke Invoke-RestMethod -ModuleName Maester-RuntimeFiles -Times 1 -Exactly -ParameterFilter { $Method -eq 'PATCH' -and $MaximumRedirection -eq 0 }
+  }
+  It 'rejects changed template before writing' {
+    $global:RuntimeTest.Changed=$true
+    { Set-MaesterRuntimeBundlePin @pinTarget } | Should -Throw '*Inspect the selected job*'
+    Should -Invoke Invoke-RestMethod -ModuleName Maester-RuntimeFiles -Times 0 -Exactly -ParameterFilter { $Method -eq 'PATCH' }
+  }
+  It 'rejects a recreated identity before writing' {
+    $global:RuntimeTest.WrongPrincipal=$true
+    { Set-MaesterRuntimeBundlePin @pinTarget } | Should -Throw
+    Should -Invoke Invoke-RestMethod -ModuleName Maester-RuntimeFiles -Times 0 -Exactly -ParameterFilter { $Method -eq 'PATCH' }
+  }
+  It 'reports uncertain activation rather than retrying on mismatched readback' {
+    $global:RuntimeTest.WrongReadback=$true
+    { Set-MaesterRuntimeBundlePin @pinTarget } | Should -Throw '*may already be pinned*'
+    Should -Invoke Invoke-RestMethod -ModuleName Maester-RuntimeFiles -Times 1 -Exactly -ParameterFilter { $Method -eq 'PATCH' }
   }
 }

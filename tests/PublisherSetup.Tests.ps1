@@ -22,30 +22,19 @@ Describe 'Setup publishes runtime files through the real target-guarded publishe
         $s.Reads++
         return ($s.Metadata | ConvertTo-Json -Compress)
       }
-      if ($a[0] -eq 'account' -and $a[1] -eq 'get-access-token' -and 'https://management.azure.com/' -in $a) { return 'offline-arm' }
+      if ($a[0] -eq 'account' -and $a[1] -eq 'get-access-token') {
+        if ('--tenant' -notin $a) { return 'offline-arm' }
+        if ($a[([array]::IndexOf($a, '--tenant') + 1)] -ne $s.Tenant) { throw 'Wrong token tenant' }
+        $audience = $a[([array]::IndexOf($a, '--resource') + 1)]
+        $claims = @{ tid = $s.Tenant; oid = $(if ($s.TokenOperator) { $s.TokenOperator } else { $s.Operator }); aud = $audience; exp = [DateTimeOffset]::UtcNow.AddHours(1).ToUnixTimeSeconds() } | ConvertTo-Json -Compress
+        return 'header.' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($claims)).TrimEnd('=').Replace('+','-').Replace('/','_') + '.signature'
+      }
       if ($a[0] -eq 'storage' -and $a[1] -eq 'account' -and $a[2] -eq 'show') {
         if ($a[([array]::IndexOf($a, '--resource-group') + 1)] -ne 'selected-group' -or $a[([array]::IndexOf($a, '--name') + 1)] -ne 'selectedstorage') { throw 'Unscoped storage metadata call' }
         $s.StorageReads++
         if ($s.StorageFailure) { $global:LASTEXITCODE = 1; return '' }
         if ($s.StorageMalformed) { return '{bad' }
         return ($s.Storage | ConvertTo-Json -Compress)
-      }
-      if ($a[0] -eq 'storage' -and $a[1] -eq 'file' -and $a[2] -eq 'upload') {
-        foreach ($pair in @(@('--account-name','selectedstorage'), @('--auth-mode','key'), @('--share-name','scripts'))) {
-          $index = [array]::IndexOf($a, $pair[0])
-          if ($index -lt 0 -or $a[$index + 1] -ne $pair[1]) { throw 'Incorrect upload target' }
-        }
-        '--account-key' | Should -Not -BeIn $a
-        ($a -join ' ') | Should -Not -Match 'offline-key'
-        $env:AZURE_STORAGE_KEY | Should -BeExactly 'offline-key'
-        [Environment]::GetEnvironmentVariables('Process').Contains('AZURE_STORAGE_CONNECTION_STRING') | Should -BeTrue
-        [Environment]::GetEnvironmentVariable('AZURE_STORAGE_CONNECTION_STRING', 'Process') | Should -BeExactly ''
-        $source = $a[([array]::IndexOf($a, '--source') + 1)]
-        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw 'Upload source does not exist' }
-        $s.Uploads.Add($a[([array]::IndexOf($a, '--path') + 1)])
-        $s.StagingPaths.Add((Split-Path $source -Parent))
-        if ($s.DisableAfterFirstUpload) { $s.Metadata.state = 'Disabled' }
-        return
       }
       throw "Unexpected offline Azure command: $($a -join ' ')"
     }
@@ -58,9 +47,10 @@ Describe 'Setup publishes runtime files through the real target-guarded publishe
     function Assert-MaesterConsentPlanApproval { param($Plan,$ApprovedPlanHash); if ($Plan.planHash -ne $ApprovedPlanHash) { throw 'Offline consent mismatch' } }
     function Register-MaesterExternalSetupStarted { $global:PublisherSetupState.MarkerCalls++ }
     function Open-MaesterOwnershipJournal { $global:PublisherSetupState.MarkerCalls | Should -Be 1; $global:PublisherSetupState.JournalOpens++; $session=[pscustomobject]@{}; $session | Add-Member ScriptMethod Dispose {}; $session }
+    function Assert-MaesterKeylessProvisioning { $global:PublisherSetupState.MigrationReads++; if ($global:PublisherSetupState.LegacyTarget) { throw 'Keyless migration requires reviewed plan' } }
     function Get-MaesterSetupScopes { @('Application.Read.All') }
-    function Get-MaesterSetupAccessPlan { [pscustomobject]@{ planHash = 'fixture-approved-plan'; capability = 'DeploymentSetupAccess' } }
-    function Invoke-MaesterSetupAccessPlan { [pscustomobject]@{ Receipts = @{ EXO_APPROLE_ASSIGNMENT_IDS = @(); TEAMS_READER_ROLE_ASSIGNMENT_IDS = @(); AZURE_ROLE_ASSIGNMENT_IDS = @() }; EasyAuth = $null; PrincipalDisplayName = 'offline' } }
+    function Get-MaesterSetupAccessPlan { [pscustomobject]@{ planHash = 'fixture-approved-plan'; capability = 'DeploymentSetupAccess'; details = @{ inventory = @{ operator = @{ id = $global:PublisherSetupState.Operator } } } } }
+    function Invoke-MaesterSetupAccessPlan { if ($global:PublisherSetupState.DisableBeforePublisher) { $global:PublisherSetupState.Metadata.state = 'Disabled' }; [pscustomobject]@{ Receipts = @{ EXO_APPROLE_ASSIGNMENT_IDS = @(); TEAMS_READER_ROLE_ASSIGNMENT_IDS = @(); AZURE_ROLE_ASSIGNMENT_IDS = @() }; EasyAuth = $null; PrincipalDisplayName = 'offline' } }
     function Invoke-PublisherSetup {
       param([switch]$PlanOnly)
       & (Join-Path $root 'scripts/Setup-PostDeploy.ps1') -SubscriptionId $global:PublisherSetupState.Sub -TenantId $global:PublisherSetupState.Tenant -EnvironmentName selected -ResourceGroupName selected-group -PermissionProfile Minimal -Apply:(-not $PlanOnly) -ApprovedPlanHash fixture-approved-plan
@@ -70,16 +60,16 @@ Describe 'Setup publishes runtime files through the real target-guarded publishe
     $env:MAESTER_SETUP_CLIENT_ID = '99999999-9999-4999-8999-999999999999'
     $sub = '11111111-1111-4111-8111-111111111111'; $tenant = '22222222-2222-4222-8222-222222222222'
     $global:PublisherSetupState = @{
-      Sub = $sub; Tenant = $tenant; JournalOpens = 0; MarkerCalls = 0; EnvWrites = 0; Reads = 0; StorageReads = 0; Downloads = 0
+      Sub = $sub; Tenant = $tenant; Operator = '55555555-5555-4555-8555-555555555555'; TokenOperator = ''; MigrationReads = 0; LegacyTarget = $false; PinWrites = 0; BlobReads = 0; JournalOpens = 0; MarkerCalls = 0; EnvWrites = 0; Reads = 0; StorageReads = 0; Downloads = 0
       StorageFailure = $false; StorageMalformed = $false; DisableBeforePublisher = $false; DisableDuringDownload = $false; DisableAfterFirstUpload = $false
       Calls = [Collections.Generic.List[string]]::new(); Uploads = [Collections.Generic.List[string]]::new(); StagingPaths = [Collections.Generic.List[string]]::new()
       Metadata = @{ id = "/subscriptions/$sub"; subscriptionId = $sub; tenantId = $tenant; displayName = 'Selected'; state = 'Enabled' }
       DefaultAccount = @{ id = '99999999-9999-4999-8999-999999999999'; tenantId = '88888888-8888-4888-8888-888888888888'; state = 'Enabled' }
-      Storage = @{ id = "/subscriptions/$sub/resourceGroups/selected-group/providers/Microsoft.Storage/storageAccounts/selectedstorage"; name = 'selectedstorage'; type = 'Microsoft.Storage/storageAccounts'; resourceGroup = 'selected-group' }
+      Storage = @{ id = "/subscriptions/$sub/resourceGroups/selected-group/providers/Microsoft.Storage/storageAccounts/selectedstorage"; name = 'selectedstorage'; type = 'Microsoft.Storage/storageAccounts'; resourceGroup = 'selected-group'; allowSharedKeyAccess = $false }
       Values = @{ AZURE_ENV_NAME = 'selected'; AZURE_SUBSCRIPTION_ID = $sub; AZURE_RESOURCE_GROUP = 'selected-group'; STORAGE_ACCOUNT_NAME = 'selectedstorage'; WEB_APP_ENABLED = 'false'; containerAppJobName = 'selected-job'; containerAppJobPrincipalId = '33333333-3333-4333-8333-333333333333' }
     }
     # Keep the real modules loaded so their transport mocks survive entrypoint imports.
-    Mock Import-Module {} -ParameterFilter { $Name -like '*Maester-SetupHelpers.psm1' -or $Name -like '*Maester-RuntimeFiles.psm1' -or $Name -like '*Maester-ConsentPlan.psm1' -or $Name -like '*Maester-SetupConsent.psm1' -or $Name -like '*Maester-OwnershipJournal.psm1' -or $Name -like '*Maester-InfrastructureOwnership.psm1' }
+    Mock Import-Module {} -ParameterFilter { $Name -like '*Maester-SetupHelpers.psm1' -or $Name -like '*Maester-RuntimeFiles.psm1' -or $Name -like '*Maester-ConsentPlan.psm1' -or $Name -like '*Maester-SetupConsent.psm1' -or $Name -like '*Maester-OwnershipJournal.psm1' -or $Name -like '*Maester-InfrastructureOwnership.psm1' -or $Name -like '*Maester-KeylessMigration.psm1' }
     Mock Assert-GraphAccess {}
     Mock Invoke-GraphRestRequest {
       if ($Method -ne 'GET') { throw 'Unexpected Graph write' }
@@ -92,10 +82,6 @@ Describe 'Setup publishes runtime files through the real target-guarded publishe
     Mock Invoke-RestMethod {
       $s = $global:PublisherSetupState
       $base = "https://management.azure.com/subscriptions/$($s.Sub)/resourceGroups/selected-group/providers"
-      if ($Method -eq 'POST' -and $Uri -eq "$base/Microsoft.Storage/storageAccounts/selectedstorage/listKeys?api-version=2023-05-01") {
-        if ($s.DisableBeforePublisher) { $s.Metadata.state = 'Disabled' }
-        return [pscustomobject]@{ keys = @([pscustomobject]@{ value = 'offline-key' }) }
-      }
       if ($Method -ne 'GET' -or ($Uri -notlike "$base/Microsoft.Storage/storageAccounts/selectedstorage?*" -and $Uri -notlike "$base/Microsoft.App/jobs/selected-job?*")) { throw "Unexpected ARM request: $Method $Uri" }
       $id = ([uri]$Uri).AbsolutePath
       return [pscustomobject]@{
@@ -105,15 +91,52 @@ Describe 'Setup publishes runtime files through the real target-guarded publishe
       }
     }
     Mock Invoke-WebRequest { throw 'Unexpected download outside the runtime module' }
-    Mock Invoke-WebRequest -ModuleName Maester-RuntimeFiles {
-      if ($Uri -ne 'https://github.com/PowerShell/PowerShell/releases/download/v7.6.6/powershell-7.6.6-linux-x64.tar.gz') { throw "Unexpected download: $Uri" }
+    Mock Save-MaesterPublicArtifact -ModuleName Maester-RuntimeFiles {
+      if ($Uri -notlike 'https://github.com/PowerShell/PowerShell/releases/download/v7.6.6/*' -and $Uri -notlike 'https://www.powershellgallery.com/api/v2/package/*') { throw "Unexpected download: $Uri" }
       $s = $global:PublisherSetupState; $s.Downloads++
       [IO.File]::WriteAllText($OutFile, 'offline archive fixture')
-      $s.StagingPaths.Add((Split-Path $OutFile -Parent))
+      $stage = Split-Path $OutFile -Parent
+      if ((Split-Path $stage -Leaf) -eq 'packages') { $stage = Split-Path $stage -Parent }
+      $s.StagingPaths.Add($stage)
       if ($s.DisableDuringDownload) { $s.Metadata.state = 'Disabled' }
     }
-    # No archive/network dependency: hash verification itself is covered by runtime integrity tests.
-    Mock Get-FileHash -ModuleName Maester-RuntimeFiles { [pscustomobject]@{ Hash = 'DDBC4A2D113BBD46D283CFEDCBCD117A70CAEFD7673F41F2B4E0000BADF103BC' } }
+    # Input hashes are fixture-backed; the content-addressed ZIP uses real SHA256.
+    Mock Get-FileHash -ModuleName Maester-RuntimeFiles {
+      if ($LiteralPath -like '*powershell-7.6.6-linux-x64.tar.gz') { return [pscustomobject]@{ Hash = 'DDBC4A2D113BBD46D283CFEDCBCD117A70CAEFD7673F41F2B4E0000BADF103BC' } }
+      if ($LiteralPath -like '*.nupkg') {
+        $lock = Get-Content (Join-Path $root 'runtime-packages.lock.json') -Raw | ConvertFrom-Json
+        $package = @($lock.packages | Where-Object { "$($_.name).$($_.version).nupkg" -eq (Split-Path $LiteralPath -Leaf) })
+        if ($package.Count -ne 1) { throw 'Unexpected package fixture' }
+        return [pscustomobject]@{ Hash = $package[0].sha256 }
+      }
+      Microsoft.PowerShell.Utility\Get-FileHash -LiteralPath $LiteralPath -Algorithm SHA256
+    }
+    Mock Invoke-MaesterBlobRequest -ModuleName Maester-RuntimeFiles {
+      $s = $global:PublisherSetupState
+      $Uri.AbsoluteUri | Should -BeExactly "https://selectedstorage.blob.core.windows.net/runtime/bundles/$($Bundle.Sha256).zip"
+      $Token | Should -Match '^header\.'
+      Test-Path -LiteralPath $Bundle.Path -PathType Leaf | Should -BeTrue
+      if ($Method -eq 'PUT') {
+        $s.Uploads.Add($Bundle.BlobName)
+        if ($s.DisableAfterFirstUpload) { $s.Metadata.state = 'Disabled' }
+        return 201
+      }
+      if ($Method -eq 'GET') { $s.BlobReads++; return 200 }
+      throw 'Unexpected Blob method'
+    }
+    $global:PublisherSetupState.Job = @{
+      id = "/subscriptions/$sub/resourceGroups/selected-group/providers/Microsoft.App/jobs/selected-job"
+      identity = @{ principalId = '33333333-3333-4333-8333-333333333333' }
+      properties = @{ template = @{ containers = @(@{ name = 'maester'; image = 'digest-pinned-fixture'; env = @(@{ name = 'STORAGE_ACCOUNT_NAME'; value = 'selectedstorage' }) }) } }
+    }
+    Mock Invoke-RestMethod -ModuleName Maester-RuntimeFiles {
+      $s = $global:PublisherSetupState
+      $Uri | Should -BeExactly "https://management.azure.com$($s.Job.id)?api-version=2024-03-01"
+      $MaximumRedirection | Should -Be 0
+      if ($Method -eq 'PATCH') { $s.PinWrites++; $payload = $Body | ConvertFrom-Json -AsHashtable; $s.Job.properties.template = $payload.properties.template; return }
+      if ($Method -ne 'GET') { throw 'Unexpected pin method' }
+      return $s.Job | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+    }
   }
   AfterEach {
     foreach ($path in $global:PublisherSetupState.StagingPaths) { Test-Path -LiteralPath $path | Should -BeFalse }
@@ -138,6 +161,15 @@ Describe 'Setup publishes runtime files through the real target-guarded publishe
     $global:PublisherSetupState.EnvWrites | Should -Be 0
   }
 
+  It 'blocks direct setup on a legacy target before Graph or setup writes' {
+    $global:PublisherSetupState.LegacyTarget = $true
+    { Invoke-PublisherSetup } | Should -Throw '*Keyless migration*'
+    Should -Invoke Assert-GraphAccess -Times 0 -Exactly
+    $global:PublisherSetupState.JournalOpens | Should -Be 0
+    $global:PublisherSetupState.Downloads | Should -Be 0
+    $global:PublisherSetupState.Uploads.Count | Should -Be 0
+  }
+
   It 'rejects invalid initial subscription <case> before downloads or uploads' -ForEach @('wrong tenant','wrong subscription','Disabled','missing state' | ForEach-Object { @{ case = $_ } }) {
     switch ($case) {
       'wrong tenant' { $global:PublisherSetupState.Metadata.tenantId = '33333333-3333-4333-8333-333333333333' }
@@ -150,7 +182,7 @@ Describe 'Setup publishes runtime files through the real target-guarded publishe
     $global:PublisherSetupState.Uploads.Count | Should -Be 0
   }
 
-  It 'rejects invalid publisher storage <case> before downloads or uploads' -ForEach @('wrong subscription','wrong group','wrong name','wrong type','missing id','failed lookup','malformed lookup' | ForEach-Object { @{ case = $_ } }) {
+  It 'rejects invalid publisher storage <case> before downloads or uploads' -ForEach @('wrong subscription','wrong group','wrong name','wrong type','missing id','failed lookup','malformed lookup','Shared Key enabled' | ForEach-Object { @{ case = $_ } }) {
     switch ($case) {
       'wrong subscription' { $global:PublisherSetupState.Storage.id = $global:PublisherSetupState.Storage.id.Replace($global:PublisherSetupState.Sub, '99999999-9999-4999-8999-999999999999') }
       'wrong group' { $global:PublisherSetupState.Storage.resourceGroup = 'other-group' }
@@ -159,12 +191,13 @@ Describe 'Setup publishes runtime files through the real target-guarded publishe
       'missing id' { $global:PublisherSetupState.Storage.Remove('id') }
       'failed lookup' { $global:PublisherSetupState.StorageFailure = $true }
       'malformed lookup' { $global:PublisherSetupState.StorageMalformed = $true }
+      'Shared Key enabled' { $global:PublisherSetupState.Storage.allowSharedKeyAccess = $true }
     }
     $expectedError = switch ($case) {
       'missing id' { '*id*' }
       'failed lookup' { '*Unable to verify the selected storage account*' }
       'malformed lookup' { '*Invalid storage account ARM metadata*' }
-      default { '*Storage account ARM identity does not match*' }
+      default { '*Storage identity or Shared Key policy does not match*' }
     }
     { Invoke-PublisherSetup } | Should -Throw $expectedError
     $global:PublisherSetupState.StorageReads | Should -Be 1
@@ -172,10 +205,17 @@ Describe 'Setup publishes runtime files through the real target-guarded publishe
     $global:PublisherSetupState.Uploads.Count | Should -Be 0
   }
 
+  It 'rejects a token from a different publishing operator before Blob writes or pin activation' {
+    $global:PublisherSetupState.TokenOperator = '66666666-6666-4666-8666-666666666666'
+    { Invoke-PublisherSetup } | Should -Throw '*approved publishing operator*'
+    $global:PublisherSetupState.Uploads.Count | Should -Be 0
+    $global:PublisherSetupState.PinWrites | Should -Be 0
+  }
+
   It 'revalidates the subscription inside the publisher after earlier setup accepted it' {
     $global:PublisherSetupState.DisableBeforePublisher = $true
     { Invoke-PublisherSetup } | Should -Throw '*currently be Enabled*'
-    $global:PublisherSetupState.Reads | Should -Be 3
+    $global:PublisherSetupState.Reads | Should -BeGreaterOrEqual 3
     $global:PublisherSetupState.StorageReads | Should -Be 0
     $global:PublisherSetupState.Downloads | Should -Be 0
     $global:PublisherSetupState.Uploads.Count | Should -Be 0
@@ -184,26 +224,31 @@ Describe 'Setup publishes runtime files through the real target-guarded publishe
   It 'stops before the first upload when the subscription becomes Disabled during download' {
     $global:PublisherSetupState.DisableDuringDownload = $true
     { Invoke-PublisherSetup } | Should -Throw '*currently be Enabled*'
-    $global:PublisherSetupState.Downloads | Should -Be 1
+    $global:PublisherSetupState.Downloads | Should -Be 10
     $global:PublisherSetupState.Uploads.Count | Should -Be 0
   }
 
-  It 'stops after exactly one upload when the subscription becomes Disabled between uploads' {
+  It 'does not activate the bundle when the subscription becomes Disabled after publication' {
     $global:PublisherSetupState.DisableAfterFirstUpload = $true
     { Invoke-PublisherSetup } | Should -Throw '*currently be Enabled*'
-    $global:PublisherSetupState.Downloads | Should -Be 1
+    $global:PublisherSetupState.Downloads | Should -Be 10
     $global:PublisherSetupState.Uploads.Count | Should -Be 1
-    $global:PublisherSetupState.Uploads[0] | Should -Be 'Invoke-MaesterContainerJob.ps1'
+    $global:PublisherSetupState.Uploads[0] | Should -Match '^bundles/[a-f0-9]{64}\.zip$'
+    $global:PublisherSetupState.PinWrites | Should -Be 0
   }
 
-  It 'uploads all eight real staged files to the selected subscription despite a different global default' {
+  It 'publishes one verified bundle and activates all four pins despite a different global default' {
     Invoke-PublisherSetup
-    $global:PublisherSetupState.Downloads | Should -Be 1
+    $global:PublisherSetupState.Downloads | Should -Be 10
     $global:PublisherSetupState.StorageReads | Should -Be 1
-    $global:PublisherSetupState.Reads | Should -Be 11
-    $global:PublisherSetupState.Uploads.Count | Should -Be 8
-    ($global:PublisherSetupState.Uploads -join ',') | Should -Be 'Invoke-MaesterContainerJob.ps1,Maester.AssessmentEvidence.psm1,Maester.DriftInputs.psm1,Maester.DriftRun.psm1,Install-LockedModules.ps1,Start-MaesterContainerJob.sh,runtime-packages.lock.json,powershell-7.6.6-linux-x64.tar.gz'
-    @($global:PublisherSetupState.Calls | Where-Object { $_ -like 'storage file upload*' -and $_ -notlike '*--subscription 11111111-1111-4111-8111-111111111111*' }).Count | Should -Be 0
+    $global:PublisherSetupState.Uploads.Count | Should -Be 1
+    $global:PublisherSetupState.BlobReads | Should -Be 1
+    $global:PublisherSetupState.PinWrites | Should -Be 1
+    $global:PublisherSetupState.MigrationReads | Should -BeGreaterOrEqual 3
+    $pins = @($global:PublisherSetupState.Job.properties.template.containers[0].env | Where-Object name -like 'MAESTER_RUNTIME_*')
+    $pins.Count | Should -Be 4
+    ($pins | Where-Object name -eq MAESTER_RUNTIME_BLOB_NAME).value | Should -BeExactly $global:PublisherSetupState.Uploads[0]
+    @($global:PublisherSetupState.Calls | Where-Object { $_ -like 'storage file*' -or $_ -like '*listKeys*' -or $_ -like '*--account-key*' }).Count | Should -Be 0
     @($global:PublisherSetupState.Calls | Where-Object { $_ -like 'account set*' -or $_ -like 'login*' }).Count | Should -Be 0
   }
 }

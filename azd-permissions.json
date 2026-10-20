@@ -3,7 +3,7 @@
   "solutionId": "azd-maester-containerappjob",
   "status": "implemented",
   "coverage": "partial",
-  "reviewedOn": "2026-10-19",
+  "reviewedOn": "2026-10-20",
   "requirements": [
     {
       "resource": "https://graph.microsoft.com",
@@ -643,7 +643,7 @@
         },
         {
           "path": "scripts/Setup-PostDeploy.ps1",
-          "sha256": "4fc41fb121d2284d4de91bbd0e18d97344a2f5f27bae0cc47ad11fc091490985"
+          "sha256": "041273020130d0812d234d482c4dcc117985cdd59eb534e40502b9f6ee2f943f"
         }
       ]
     },
@@ -669,7 +669,7 @@
         },
         {
           "path": "scripts/Setup-PostDeploy.ps1",
-          "sha256": "4fc41fb121d2284d4de91bbd0e18d97344a2f5f27bae0cc47ad11fc091490985"
+          "sha256": "041273020130d0812d234d482c4dcc117985cdd59eb534e40502b9f6ee2f943f"
         }
       ]
     },
@@ -691,11 +691,11 @@
         },
         {
           "path": "scripts/Setup-PostDeploy.ps1",
-          "sha256": "4fc41fb121d2284d4de91bbd0e18d97344a2f5f27bae0cc47ad11fc091490985"
+          "sha256": "041273020130d0812d234d482c4dcc117985cdd59eb534e40502b9f6ee2f943f"
         },
         {
           "path": "scripts/Maester-SetupConsent.psm1",
-          "sha256": "5fe751bc2834f420eb6ef85ac50550040367b44566881c129522f97b7eab497c"
+          "sha256": "ab4bc875a9c006f3322edabe8a1f7c73286407ff831c2bb3cdcde071b0772581"
         }
       ]
     },
@@ -717,11 +717,11 @@
         },
         {
           "path": "scripts/Setup-PostDeploy.ps1",
-          "sha256": "4fc41fb121d2284d4de91bbd0e18d97344a2f5f27bae0cc47ad11fc091490985"
+          "sha256": "041273020130d0812d234d482c4dcc117985cdd59eb534e40502b9f6ee2f943f"
         },
         {
           "path": "scripts/Maester-SetupConsent.psm1",
-          "sha256": "5fe751bc2834f420eb6ef85ac50550040367b44566881c129522f97b7eab497c"
+          "sha256": "ab4bc875a9c006f3322edabe8a1f7c73286407ff831c2bb3cdcde071b0772581"
         }
       ]
     },
@@ -743,11 +743,11 @@
         },
         {
           "path": "scripts/Setup-PostDeploy.ps1",
-          "sha256": "4fc41fb121d2284d4de91bbd0e18d97344a2f5f27bae0cc47ad11fc091490985"
+          "sha256": "041273020130d0812d234d482c4dcc117985cdd59eb534e40502b9f6ee2f943f"
         },
         {
           "path": "scripts/Maester-SetupConsent.psm1",
-          "sha256": "5fe751bc2834f420eb6ef85ac50550040367b44566881c129522f97b7eab497c"
+          "sha256": "ab4bc875a9c006f3322edabe8a1f7c73286407ff831c2bb3cdcde071b0772581"
         }
       ]
     },
@@ -769,11 +769,11 @@
         },
         {
           "path": "scripts/Setup-PostDeploy.ps1",
-          "sha256": "4fc41fb121d2284d4de91bbd0e18d97344a2f5f27bae0cc47ad11fc091490985"
+          "sha256": "041273020130d0812d234d482c4dcc117985cdd59eb534e40502b9f6ee2f943f"
         },
         {
           "path": "scripts/Maester-SetupConsent.psm1",
-          "sha256": "5fe751bc2834f420eb6ef85ac50550040367b44566881c129522f97b7eab497c"
+          "sha256": "ab4bc875a9c006f3322edabe8a1f7c73286407ff831c2bb3cdcde071b0772581"
         }
       ]
     },
@@ -795,11 +795,11 @@
         },
         {
           "path": "scripts/Setup-PostDeploy.ps1",
-          "sha256": "4fc41fb121d2284d4de91bbd0e18d97344a2f5f27bae0cc47ad11fc091490985"
+          "sha256": "041273020130d0812d234d482c4dcc117985cdd59eb534e40502b9f6ee2f943f"
         },
         {
           "path": "scripts/Maester-SetupConsent.psm1",
-          "sha256": "5fe751bc2834f420eb6ef85ac50550040367b44566881c129522f97b7eab497c"
+          "sha256": "ab4bc875a9c006f3322edabe8a1f7c73286407ff831c2bb3cdcde071b0772581"
         }
       ]
     },
@@ -821,11 +821,11 @@
         },
         {
           "path": "scripts/Setup-PostDeploy.ps1",
-          "sha256": "4fc41fb121d2284d4de91bbd0e18d97344a2f5f27bae0cc47ad11fc091490985"
+          "sha256": "041273020130d0812d234d482c4dcc117985cdd59eb534e40502b9f6ee2f943f"
         },
         {
           "path": "scripts/Maester-SetupConsent.psm1",
-          "sha256": "5fe751bc2834f420eb6ef85ac50550040367b44566881c129522f97b7eab497c"
+          "sha256": "ab4bc875a9c006f3322edabe8a1f7c73286407ff831c2bb3cdcde071b0772581"
         }
       ]
     },
@@ -847,11 +847,11 @@
         },
         {
           "path": "scripts/Setup-PostDeploy.ps1",
-          "sha256": "4fc41fb121d2284d4de91bbd0e18d97344a2f5f27bae0cc47ad11fc091490985"
+          "sha256": "041273020130d0812d234d482c4dcc117985cdd59eb534e40502b9f6ee2f943f"
         },
         {
           "path": "scripts/Maester-SetupConsent.psm1",
-          "sha256": "5fe751bc2834f420eb6ef85ac50550040367b44566881c129522f97b7eab497c"
+          "sha256": "ab4bc875a9c006f3322edabe8a1f7c73286407ff831c2bb3cdcde071b0772581"
         }
       ]
     },
@@ -989,9 +989,9 @@
     }
   ],
   "gaps": [
-    "Always-created workload Azure RBAC Storage Blob Data Contributor on the solution storage account is not inventoried.",
+    "Workload Azure RBAC is not inventoried here: runtime-container Blob Data Reader and separate archive/latest Blob Data Contributor assignments replace the old account-wide Blob Contributor declaration. Incremental deployments do not remove historical assignments; the read-only migration guard blocks observed account/ancestor Blob Contributor or Owner grants before provisioning and setup. This does not attest absence of custom-role or group-derived access.",
     "Optional ACR hosting is not inventoried: AcrPull for the workload on the selected registry.",
-    "The deployment operator Storage Blob Data Reader assignment on the solution storage account is not inventoried, and the ARM authority needed to inspect/create role assignments is not classified.",
+    "Deployment operator account-scoped Storage Blob Data Reader and non-ACR runtime-container Storage Blob Data Contributor assignments are not represented as permission requirements here. The setup plan explicitly reviews each selected missing operator grant, and the publisher verifies the approved operator Entra token. ARM authority to inspect/create role assignments remains unclassified.",
     "Optional Exchange workload access is not represented as permission requirements here: Exchange.ManageAsApp, the Exchange service-principal registration, View-Only Configuration RBAC, and cleanup authority. The setup plan separately inventories and reviews each selected missing operation before writes.",
     "The optional workload Teams Reader built-in Entra directory role and cleanup authority are not represented here; the deployment-operator RoleManagement.ReadWrite.Directory scope is declared. The selected directory-role delta is separately reviewed in the setup plan.",
     "Optional Azure setup workload Reader at exact operator-selected subscription or management-group scopes, and the ARM authority used to inspect/create those assignments, are not represented here. The setup plan separately inventories and reviews their selected deltas.",
