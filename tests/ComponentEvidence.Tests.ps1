@@ -3,8 +3,8 @@ Describe 'Canonical target guard provenance' {
   It 'pins the reviewed consent migration revision and exact vendored bytes' {
     $lock = Get-Content (Join-Path $root 'azd-components.lock.json') -Raw | ConvertFrom-Json
     $component = $lock.components | Where-Object id -eq 'maester-azd-hooks'
-    $component.version | Should -BeExactly '3.0.1'
-    $component.sourceRevision | Should -BeExactly 'b9019c809bcffd2747fdb2f47e455ee9edfe7564'
+    $component.version | Should -BeExactly '3.1.1'
+    $component.sourceRevision | Should -BeExactly 'def75ea1d03636ebae234c5e0b9c0fda25f0f9bf'
     $component.files.Count | Should -Be 13
     foreach ($file in $component.files) {
       (Get-FileHash -LiteralPath (Join-Path $root $file.target) -Algorithm SHA256).Hash.ToLowerInvariant() | Should -BeExactly $file.sha256
