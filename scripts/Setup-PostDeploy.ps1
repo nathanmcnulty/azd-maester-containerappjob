@@ -170,6 +170,26 @@ $containerAppJob = Resolve-MaesterMainDeploymentTarget -EnvironmentValues $deplo
 $containerAppJobName = [string]$containerAppJob.name
 $principalId = [string]$containerAppJob.identity.principalId
 
+function Assert-CurrentSetupTargets {
+  $null = Get-AzCliSubscriptionContext -SubscriptionId $SubscriptionId -TenantId $TenantId
+  $current = Resolve-MaesterDeploymentTargets -EnvironmentValues $deploymentValues -SubscriptionId $SubscriptionId -ResourceGroupName $resolvedResourceGroupName -EnvironmentName $EnvironmentName -SolutionName 'container-app-job' -GetResource {
+    param($path)
+    Invoke-RestMethod -Method GET -Uri "https://management.azure.com$path" -Headers $armHeaders
+  }
+  $currentRuntime = Resolve-MaesterMainDeploymentTarget -EnvironmentValues $deploymentValues `
+    -NameOutput 'containerAppJobName' -PrincipalOutput 'containerAppJobPrincipalId' `
+    -ProviderType 'Microsoft.App/jobs' -ApiVersion '2024-03-01' `
+    -SubscriptionId $SubscriptionId -ResourceGroupName $resolvedResourceGroupName `
+    -EnvironmentName $EnvironmentName -SolutionName 'container-app-job' -GetResource {
+      param($path)
+      Invoke-RestMethod -Method GET -Uri "https://management.azure.com$path" -Headers $armHeaders
+    }
+  if ($currentRuntime.id -ine $containerAppJob.id -or $currentRuntime.identity.principalId -ine $principalId -or
+      $current.StorageAccount.id -ine $storageAccount.id -or
+      (($null -eq $current.WebApp) -ne ($null -eq $webApp)) -or
+      ($webApp -and $current.WebApp.id -ine $webApp.id)) { throw 'Deployment targets changed after setup planning.' }
+}
+
 # Access planning runs only after every deployment target and ownership guard.
 Import-Module (Join-Path $PSScriptRoot 'vendor/Azd.MaesterHooks/Maester-ConsentPlan.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'Maester-SetupConsent.psm1') -Force
@@ -217,55 +237,75 @@ if (-not $Apply) {
   Write-Host 'Plan only. No setup grants, application changes, uploads, or receipts were written. Review the plan and rerun with -Apply -ApprovedPlanHash.'
   return $accessPlan
 }
-$accessResult = Invoke-MaesterSetupAccessPlan -PlanParameters $accessPlanParameters -ApprovedPlanHash $ApprovedPlanHash
-Set-MaesterAzdEnvValue -EnvironmentName $EnvironmentName -Name 'CONTAINER_JOB_MI_PRINCIPAL_ID' -Value $principalId
-Set-MaesterAzdEnvValue -EnvironmentName $EnvironmentName -Name 'CONTAINER_JOB_NAME' -Value $containerAppJobName
-$exchangeSetupStatus = if ($IncludeExchange) { 'configured' } else { 'disabled' }
-$teamsSetupStatus = if ($IncludeTeams) { 'configured' } else { 'disabled' }
-$azureSetupStatus = if ($IncludeAzure) { 'configured' } else { 'disabled' }
-Set-MaesterAzdEnvValue -EnvironmentName $EnvironmentName -Name 'SETUP_EXCHANGE_STATUS' -Value $exchangeSetupStatus
-Set-MaesterAzdEnvValue -EnvironmentName $EnvironmentName -Name 'SETUP_TEAMS_STATUS' -Value $teamsSetupStatus
-Set-MaesterAzdEnvValue -EnvironmentName $EnvironmentName -Name 'SETUP_AZURE_STATUS' -Value $azureSetupStatus
-foreach ($receiptName in @('EXO_APPROLE_ASSIGNMENT_IDS', 'TEAMS_READER_ROLE_ASSIGNMENT_IDS', 'AZURE_ROLE_ASSIGNMENT_IDS')) {
-  Set-MaesterAzdEnvJsonArray -EnvironmentName $EnvironmentName -Name $receiptName -Values @($accessResult.Receipts[$receiptName])
+Assert-MaesterConsentPlanApproval -Plan $accessPlan -ApprovedPlanHash $ApprovedPlanHash
+Import-Module (Join-Path $PSScriptRoot 'vendor/Azd.MaesterHooks/Maester-InfrastructureOwnership.psm1')
+Register-MaesterExternalSetupStarted -ProjectRoot $projectRoot -EnvironmentName $EnvironmentName -SolutionName 'container-app-job' -TenantId $TenantId -SubscriptionId $SubscriptionId -ResourceGroupName $resolvedResourceGroupName | Out-Null
+Import-Module (Join-Path $PSScriptRoot 'vendor/Azd.MaesterHooks/Maester-OwnershipJournal.psm1')
+$ownershipBinding = @{
+  environmentName = $EnvironmentName; tenantId = $TenantId.ToLowerInvariant(); subscriptionId = $SubscriptionId.ToLowerInvariant()
+  solutionName = 'container-app-job'; resourceGroupId = "/subscriptions/$SubscriptionId/resourceGroups/$resolvedResourceGroupName"
+  setupClientId = $env:MAESTER_SETUP_CLIENT_ID.ToLowerInvariant()
+  runtimeResourceId = [string]$containerAppJob.id; runtimePrincipalId = $principalId.ToLowerInvariant()
 }
-if ($IncludeExchange) {
-  Set-MaesterAzdEnvValue -EnvironmentName $EnvironmentName -Name 'EXO_SERVICE_PRINCIPAL_DISPLAY_NAME' -Value $accessResult.PrincipalDisplayName
+$ownershipSession = Open-MaesterOwnershipJournal -ProjectRoot $projectRoot -Binding $ownershipBinding
+try {
+  Assert-CurrentSetupTargets
+  $accessResult = Invoke-MaesterSetupAccessPlan -PlanParameters $accessPlanParameters -ApprovedPlanHash $ApprovedPlanHash -OwnershipSession $ownershipSession
+  Set-MaesterAzdEnvValue -EnvironmentName $EnvironmentName -Name 'CONTAINER_JOB_MI_PRINCIPAL_ID' -Value $principalId
+  Set-MaesterAzdEnvValue -EnvironmentName $EnvironmentName -Name 'CONTAINER_JOB_NAME' -Value $containerAppJobName
+  $exchangeSetupStatus = if ($IncludeExchange) { 'configured' } else { 'disabled' }
+  $teamsSetupStatus = if ($IncludeTeams) { 'configured' } else { 'disabled' }
+  $azureSetupStatus = if ($IncludeAzure) { 'configured' } else { 'disabled' }
+  Set-MaesterAzdEnvValue -EnvironmentName $EnvironmentName -Name 'SETUP_EXCHANGE_STATUS' -Value $exchangeSetupStatus
+  Set-MaesterAzdEnvValue -EnvironmentName $EnvironmentName -Name 'SETUP_TEAMS_STATUS' -Value $teamsSetupStatus
+  Set-MaesterAzdEnvValue -EnvironmentName $EnvironmentName -Name 'SETUP_AZURE_STATUS' -Value $azureSetupStatus
+  foreach ($receiptName in @('EXO_APPROLE_ASSIGNMENT_IDS', 'TEAMS_READER_ROLE_ASSIGNMENT_IDS', 'AZURE_ROLE_ASSIGNMENT_IDS')) {
+    $priorReceipt = [string]$deploymentValues[$receiptName]
+    $priorIds = if ($priorReceipt.Trim().StartsWith('[')) { @($priorReceipt | ConvertFrom-Json -ErrorAction Stop) } else { @($priorReceipt -split ';' | Where-Object { $_ }) }
+    # Legacy IDs are retained for operator recovery only; the journal is authoritative.
+    Set-MaesterAzdEnvJsonArray -EnvironmentName $EnvironmentName -Name $receiptName -Values @($priorIds + @($accessResult.Receipts[$receiptName]))
+  }
+  if ($IncludeExchange) {
+    Set-MaesterAzdEnvValue -EnvironmentName $EnvironmentName -Name 'EXO_SERVICE_PRINCIPAL_DISPLAY_NAME' -Value $accessResult.PrincipalDisplayName
+  }
+  if ($accessResult.EasyAuth) {
+    Set-MaesterAzdEnvValue -EnvironmentName $EnvironmentName -Name 'EASY_AUTH_ENTRA_APP_OBJECT_ID' -Value $accessResult.EasyAuth.objectId
+    Set-MaesterAzdEnvValue -EnvironmentName $EnvironmentName -Name 'EASY_AUTH_ENTRA_APP_CLIENT_ID' -Value $accessResult.EasyAuth.clientId
+    Set-MaesterAzdEnvValue -EnvironmentName $EnvironmentName -Name 'EASY_AUTH_ENTRA_APP_DISPLAY_NAME' -Value $accessResult.EasyAuth.displayName
+    $SecurityGroupObjectId = $accessResult.EasyAuth.securityGroupId
+  }
+
+  # ──────────────────────────────────────────────
+  # Upload runner script to Azure Files share
+  # ──────────────────────────────────────────────
+
+  $storageAccountName = $storageAccount.name
+  $storageKeyPath = "/subscriptions/$SubscriptionId/resourceGroups/$resolvedResourceGroupName/providers/Microsoft.Storage/storageAccounts/$storageAccountName/listKeys?api-version=2023-05-01"
+  $storageKeysResponse = Invoke-RestMethod -Method POST -Uri "https://management.azure.com$storageKeyPath" -Headers $armHeaders -Body '{}' -ContentType 'application/json'
+  $storageKey = $storageKeysResponse.keys[0].value
+
+  $includeACR = ConvertTo-BoolOrDefault -Value $env:INCLUDE_ACR -Default $false
+  Import-Module (Join-Path $PSScriptRoot 'Maester-RuntimeFiles.psm1') -Force
+  Publish-MaesterRuntimeFiles -SubscriptionId $SubscriptionId -TenantId $TenantId -ResourceGroupName $resolvedResourceGroupName -StorageAccountName $storageAccountName -StorageKey $storageKey -ProjectRoot $projectRoot -IncludeACR:$includeACR
+
+  Write-Host "Uploaded locked runner files to Azure Files share 'scripts/$storageAccountName'."
+
+  # ──────────────────────────────────────────────
+  # Optional: Build and push ACR image
+  # ──────────────────────────────────────────────
+
+  $includeACR = ConvertTo-BoolOrDefault -Value $env:INCLUDE_ACR -Default $false
+  if ($includeACR) {
+    & "$PSScriptRoot\Build-MaesterImage.ps1" `
+      -SubscriptionId $SubscriptionId `
+      -TenantId $TenantId `
+      -ResourceGroupName $resolvedResourceGroupName `
+      -EnvironmentName $EnvironmentName `
+      -ContainerAppJobName $containerAppJobName `
+      -AcrName $env:ACR_NAME
+  }
+
+
+} finally {
+  if ($null -ne $ownershipSession) { $ownershipSession.Dispose() }
 }
-if ($accessResult.EasyAuth) {
-  Set-MaesterAzdEnvValue -EnvironmentName $EnvironmentName -Name 'EASY_AUTH_ENTRA_APP_OBJECT_ID' -Value $accessResult.EasyAuth.objectId
-  Set-MaesterAzdEnvValue -EnvironmentName $EnvironmentName -Name 'EASY_AUTH_ENTRA_APP_CLIENT_ID' -Value $accessResult.EasyAuth.clientId
-  Set-MaesterAzdEnvValue -EnvironmentName $EnvironmentName -Name 'EASY_AUTH_ENTRA_APP_DISPLAY_NAME' -Value $accessResult.EasyAuth.displayName
-  $SecurityGroupObjectId = $accessResult.EasyAuth.securityGroupId
-}
-
-# ──────────────────────────────────────────────
-# Upload runner script to Azure Files share
-# ──────────────────────────────────────────────
-
-$storageAccountName = $storageAccount.name
-$storageKeyPath = "/subscriptions/$SubscriptionId/resourceGroups/$resolvedResourceGroupName/providers/Microsoft.Storage/storageAccounts/$storageAccountName/listKeys?api-version=2023-05-01"
-$storageKeysResponse = Invoke-RestMethod -Method POST -Uri "https://management.azure.com$storageKeyPath" -Headers $armHeaders -Body '{}' -ContentType 'application/json'
-$storageKey = $storageKeysResponse.keys[0].value
-
-$includeACR = ConvertTo-BoolOrDefault -Value $env:INCLUDE_ACR -Default $false
-Import-Module (Join-Path $PSScriptRoot 'Maester-RuntimeFiles.psm1') -Force
-Publish-MaesterRuntimeFiles -SubscriptionId $SubscriptionId -TenantId $TenantId -ResourceGroupName $resolvedResourceGroupName -StorageAccountName $storageAccountName -StorageKey $storageKey -ProjectRoot $projectRoot -IncludeACR:$includeACR
-
-Write-Host "Uploaded locked runner files to Azure Files share 'scripts/$storageAccountName'."
-
-# ──────────────────────────────────────────────
-# Optional: Build and push ACR image
-# ──────────────────────────────────────────────
-
-$includeACR = ConvertTo-BoolOrDefault -Value $env:INCLUDE_ACR -Default $false
-if ($includeACR) {
-  & "$PSScriptRoot\Build-MaesterImage.ps1" `
-    -SubscriptionId $SubscriptionId `
-    -TenantId $TenantId `
-    -ResourceGroupName $resolvedResourceGroupName `
-    -EnvironmentName $EnvironmentName `
-    -ContainerAppJobName $containerAppJobName `
-    -AcrName $env:ACR_NAME
-}
-

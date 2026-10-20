@@ -114,6 +114,7 @@ function Set-BlobContent {
   $headers = @{
     'Authorization'  = "Bearer $StorageToken"
     'x-ms-version'   = '2021-12-02'
+    'x-ms-date'      = [datetime]::UtcNow.ToString('R', [Globalization.CultureInfo]::InvariantCulture)
     'x-ms-blob-type' = 'BlockBlob'
     'x-ms-access-tier' = $AccessTier
   }
