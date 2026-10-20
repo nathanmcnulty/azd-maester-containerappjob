@@ -192,3 +192,9 @@ native qualification must use `-RequireNoMail` with mail disabled. Normal
 mail-enabled postprovision remains supported; inline mail delivery is explicitly
 unverified and outside the helper's validation scope. See the [receipt contract and native
 validation boundaries](docs/assessment-evidence.md).
+
+### Isolated runtime-only Azure smoke
+
+See the [opt-in runtime-only smoke guide](docs/runtime-only-smoke.md) for fixture-only
+launchers, least-privilege checks and offline regression tests. This is not an
+assessment run or automatic deployment.
