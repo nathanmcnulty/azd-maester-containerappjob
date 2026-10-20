@@ -25,5 +25,7 @@ COPY runtime-packages.lock.json /tmp/runtime-packages.lock.json
 COPY scripts/Install-LockedModules.ps1 /tmp/Install-LockedModules.ps1
 RUN $ErrorActionPreference = 'Stop'; & /tmp/Install-LockedModules.ps1 -LockPath /tmp/runtime-packages.lock.json
 
-# Runner script is mounted via Azure Files volume at /mnt/scripts.
-CMD ["pwsh"]
+# ACR mode carries all executable runner content in the digest-pinned image.
+COPY scripts/Invoke-MaesterContainerJob.ps1 scripts/Maester.AssessmentEvidence.psm1 scripts/Maester.DriftInputs.psm1 scripts/Maester.DriftRun.psm1 scripts/Start-MaesterContainerJob.sh /opt/maester/
+COPY runtime-packages.lock.json /opt/maester/runtime-packages.lock.json
+CMD ["/bin/sh", "/opt/maester/Start-MaesterContainerJob.sh", "acr"]

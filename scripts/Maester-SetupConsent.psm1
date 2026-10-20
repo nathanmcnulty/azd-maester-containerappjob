@@ -81,6 +81,7 @@ function Get-MaesterSetupAccessPlan {
     [switch]$IncludeExchange,
     [switch]$IncludeTeams,
     [switch]$IncludeAzure,
+    [switch]$IncludeACR,
     [string[]]$AzureScopes
   )
   $grantScript = Join-Path $PSScriptRoot 'vendor/Azd.MaesterHooks/Grant-MaesterGraphPermissions.ps1'
@@ -109,6 +110,23 @@ function Get-MaesterSetupAccessPlan {
   if ($storageMatches.Count -eq 0) {
     $operations.Add((New-MaesterSetupOperation 'StorageReader' 'PUT' "$($StorageAccount.id)/providers/Microsoft.Authorization/roleAssignments/{assignmentId}?api-version=2022-04-01" `
       ([ordered]@{ properties = [ordered]@{ roleDefinitionId = $storageRoleId; principalId = $user.id; principalType = 'User' } }) ''))
+  }
+
+  # Publication is an explicit reviewed grant to the same verified operator,
+  # never to the hosted job. Existing report Reader behavior remains unchanged.
+  if (-not $IncludeACR) {
+    $runtimeScope = "$($StorageAccount.id)/blobServices/default/containers/runtime"
+    $runtimeRoleId = "/subscriptions/$SubscriptionId/providers/Microsoft.Authorization/roleDefinitions/ba92f5b4-2d11-453d-a403-e96b0029c9fe"
+    $runtimeAssignments = @(Get-MaesterSetupCollection -Uri "https://management.azure.com$runtimeScope/providers/Microsoft.Authorization/roleAssignments?`$filter=atScope()&api-version=2022-04-01" -ArmHeaders $ArmHeaders)
+    $runtimeMatches = @($runtimeAssignments | Where-Object {
+      $_.properties.principalId -eq $user.id -and $_.properties.roleDefinitionId -eq $runtimeRoleId -and
+      (Get-MaesterSetupProperty $_.properties 'scope') -ieq $runtimeScope
+    })
+    $inventory['runtimePublisher'] = @($runtimeMatches | ForEach-Object id | Sort-Object)
+    if ($runtimeMatches.Count -eq 0) {
+      $operations.Add((New-MaesterSetupOperation 'StorageRuntimePublisher' 'PUT' "$runtimeScope/providers/Microsoft.Authorization/roleAssignments/{assignmentId}?api-version=2022-04-01" `
+        ([ordered]@{ properties = [ordered]@{ roleDefinitionId = $runtimeRoleId; principalId = $user.id; principalType = 'User' } }) ''))
+    }
   }
 
   if ($IncludeExchange) {
@@ -270,7 +288,7 @@ function Get-MaesterSetupAccessPlan {
     setupClientId = $env:MAESTER_SETUP_CLIENT_ID; setupAccount = $env:MAESTER_SETUP_ACCOUNT
     graphPlanHash = $graphPlan.planHash; graphPlan = $graphPlan
     includeExchange = [bool]$IncludeExchange; includeTeams = [bool]$IncludeTeams; includeAzure = [bool]$IncludeAzure
-    includeMailSend = $IncludeMailSend; includeReportSettingsWrite = $IncludeReportSettingsWrite
+    includeACR = [bool]$IncludeACR; includeMailSend = $IncludeMailSend; includeReportSettingsWrite = $IncludeReportSettingsWrite
     azureScopes = @($AzureScopes | Sort-Object -Unique); easyAuth = $easyAuth; inventory = $inventory; operations = @($operations.ToArray())
   }
   $operationValues = @($operations | ForEach-Object { $_ | ConvertTo-Json -Depth 30 -Compress })
@@ -330,7 +348,7 @@ function Get-MaesterSetupOperationOwnership {
   param($Session, $Operation, $Body, $Plan, $EasyAuth)
   $result = @{ Ownership = 'Created'; Expected = @{} }
   switch ($Operation.category) {
-    { $_ -in @('StorageReader', 'AzureReader') } {
+    { $_ -in @('StorageReader', 'StorageRuntimePublisher', 'AzureReader') } {
       $result.Kind = 'AzureRoleAssignment'
       $scope = $Operation.uri.Split('/providers/Microsoft.Authorization/roleAssignments/')[0]
       $result.Expected = @{ principalId = $Body.properties.principalId; roleDefinitionId = $Body.properties.roleDefinitionId; scope = $scope; principalType = $Body.properties.principalType }

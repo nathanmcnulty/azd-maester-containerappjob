@@ -1,4 +1,4 @@
-﻿targetScope = 'resourceGroup'
+targetScope = 'resourceGroup'
 
 @description('Deployment location')
 @metadata({
@@ -13,7 +13,7 @@ param location string = resourceGroup().location
 param environmentName string = 'dev'
 
 @description('Container image to use for the Maester job')
-param imageName string = 'mcr.microsoft.com/dotnet/runtime-deps:10.0-noble@sha256:9bc5729cebc4847b28da997c802ab71ce3a2ac42512260c3a151f61132b26f7b'
+param imageName string = 'mcr.microsoft.com/azure-powershell@sha256:3459545c448b8ae639370b3cf46e1816a3d68a045e45b96ba25e46e8de815581'
 
 @description('Optional user-assigned managed identity resource id')
 param userAssignedIdentityResourceId string = ''
@@ -128,7 +128,10 @@ var managedEnvironmentName = 'cae-${substring(normalizedEnvironmentName, 0, min(
 var containerAppJobName = 'caj-maester-${substring(normalizedEnvironmentName, 0, min(length(normalizedEnvironmentName), 12))}-${substring(resourceSuffix, 0, 6)}'
 var storageAccountName = 'stmaester${resourceSuffix}'
 var acrName = 'crmaester${resourceSuffix}'
-var fileShareName = 'scripts'
+var storageBlobDataReaderRoleId = subscriptionResourceId(
+  'Microsoft.Authorization/roleDefinitions',
+  '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'
+)
 var storageBlobDataContributorRoleId = subscriptionResourceId(
   'Microsoft.Authorization/roleDefinitions',
   'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
@@ -150,7 +153,7 @@ var defaultTags = {
 var resourceTags = union(defaultTags, customTags)
 
 // ──────────────────────────────────────────────
-// Storage Account (Azure Files for script mount + Blob for reports)
+// Storage Account (private immutable runtime bundles + report blobs)
 // ──────────────────────────────────────────────
 
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
@@ -165,22 +168,9 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
     minimumTlsVersion: 'TLS1_2'
     supportsHttpsTrafficOnly: true
     allowBlobPublicAccess: false
-    allowSharedKeyAccess: true // Required for Azure Files volume mount in Container App Environment
+    allowSharedKeyAccess: false
     defaultToOAuthAuthentication: true
     accessTier: 'Hot'
-  }
-}
-
-resource fileService 'Microsoft.Storage/storageAccounts/fileServices@2023-05-01' = {
-  name: 'default'
-  parent: storageAccount
-}
-
-resource fileShare 'Microsoft.Storage/storageAccounts/fileServices/shares@2023-05-01' = {
-  name: fileShareName
-  parent: fileService
-  properties: {
-    shareQuota: 1
   }
 }
 
@@ -194,6 +184,14 @@ resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01'
       allowPermanentDelete: true
     }
     isVersioningEnabled: false
+  }
+}
+
+resource containerRuntime 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  name: 'runtime'
+  parent: blobService
+  properties: {
+    publicAccess: 'None'
   }
 }
 
@@ -262,19 +260,6 @@ resource managedEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = {
   }
 }
 
-resource managedEnvironmentStorage 'Microsoft.App/managedEnvironments/storages@2024-03-01' = {
-  name: 'scriptstorage'
-  parent: managedEnvironment
-  properties: {
-    azureFile: {
-      accountName: storageAccount.name
-      accountKey: storageAccount.listKeys().keys[0].value
-      shareName: fileShare.name
-      accessMode: 'ReadOnly'
-    }
-  }
-}
-
 resource containerAppJob 'Microsoft.App/jobs@2024-03-01' = {
   name: containerAppJobName
   location: location
@@ -304,12 +289,40 @@ resource containerAppJob 'Microsoft.App/jobs@2024-03-01' = {
         {
           name: 'maester'
           image: imageName
-          command: [
+          // The default image is only a bootstrap interpreter, not the assessment engine.
+          // The optional ACR image packages its runner and exact engine in /opt/maester.
+          command: includeACR ? [
             '/bin/sh'
-            '/mnt/scripts/Start-MaesterContainerJob.sh'
-            includeACR ? 'acr' : 'nonacr'
+            '/opt/maester/Start-MaesterContainerJob.sh'
+            'acr'
+          ] : [
+            '/bin/sh'
+            '-c'
+            loadTextContent('../scripts/Start-MaesterRuntimeBootstrap.sh')
           ]
           env: [
+            {
+              name: 'MAESTER_RUNTIME_BOOTSTRAP'
+              value: includeACR ? '' : base64(loadTextContent('../scripts/Get-MaesterRuntimeBundle.ps1'))
+            }
+            {
+              name: 'MAESTER_RUNTIME_STORAGE_ACCOUNT'
+              value: storageAccount.name
+            }
+            // Publication verifies immutable blob bytes before atomically replacing these pins.
+            // Empty pins fail closed; provisioning alone never runs unverified script content.
+            {
+              name: 'MAESTER_RUNTIME_BLOB_NAME'
+              value: ''
+            }
+            {
+              name: 'MAESTER_RUNTIME_SHA256'
+              value: ''
+            }
+            {
+              name: 'MAESTER_RUNTIME_SIZE'
+              value: ''
+            }
             {
               name: 'STORAGE_ACCOUNT_NAME'
               value: storageAccount.name
@@ -343,21 +356,10 @@ resource containerAppJob 'Microsoft.App/jobs@2024-03-01' = {
             cpu: json('1.0')
             memory: '2Gi'
           }
-          volumeMounts: [
-            {
-              volumeName: 'scripts'
-              mountPath: '/mnt/scripts'
-            }
-          ]
+
         }
       ]
-      volumes: [
-        {
-          name: 'scripts'
-          storageType: 'AzureFile'
-          storageName: managedEnvironmentStorage.name
-        }
-      ]
+
     }
   }
 }
@@ -392,9 +394,31 @@ resource acrPullRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (
 // Role Assignments
 // ──────────────────────────────────────────────
 
-resource jobStorageBlobContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(storageAccount.id, containerAppJob.id, 'StorageBlobDataContributor')
-  scope: storageAccount
+// These scopes deliberately exclude the storage account. Reader on runtime is
+// not isolation if any inherited account-wide Blob Contributor remains: see migration guide.
+resource jobRuntimeReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(containerRuntime.id, containerAppJob.id, 'StorageBlobDataReader')
+  scope: containerRuntime
+  properties: {
+    roleDefinitionId: storageBlobDataReaderRoleId
+    principalId: containerAppJob.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource jobArchiveContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(containerArchive.id, containerAppJob.id, 'StorageBlobDataContributor')
+  scope: containerArchive
+  properties: {
+    roleDefinitionId: storageBlobDataContributorRoleId
+    principalId: containerAppJob.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource jobLatestContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(containerLatest.id, containerAppJob.id, 'StorageBlobDataContributor')
+  scope: containerLatest
   properties: {
     roleDefinitionId: storageBlobDataContributorRoleId
     principalId: containerAppJob.identity.principalId
@@ -467,18 +491,18 @@ output webAppDefaultHostName string = includeWebApp ? maesterWebApp!.outputs.web
 // these expressions aligned with the reviewed module when its declarations change.
 var maesterDeclaredResourceIds = filter([
   storageAccount.id
-  fileService.id
-  fileShare.id
   blobService.id
+  containerRuntime.id
   containerArchive.id
   containerLatest.id
   storageManagementPolicy.id
   managedEnvironment.id
-  managedEnvironmentStorage.id
   containerAppJob.id
   includeACR ? acr!.id : ''
   includeACR ? acrPullRole!.id : ''
-  jobStorageBlobContributor.id
+  jobRuntimeReader.id
+  jobArchiveContributor.id
+  jobLatestContributor.id
   enableResourceLocks ? storageDeleteLock!.id : ''
   enableResourceLocks ? environmentDeleteLock!.id : ''
   includeWebApp ? resourceId('Microsoft.Resources/deployments', 'maester-report-webapp') : ''

@@ -15,7 +15,7 @@ Describe 'Container runtime package integrity' {
       $package.sha256 | Should -Match '^[A-F0-9]{64}$'
     }
     $dockerfile | Should -Match 'FROM mcr\.microsoft\.com/dotnet/runtime-deps:[^\s]+@sha256:[a-f0-9]{64}'
-    $infra | Should -Match 'mcr\.microsoft\.com/dotnet/runtime-deps:[^\s\x27]+@sha256:[a-f0-9]{64}'
+    $infra | Should -Match 'mcr\.microsoft\.com/azure-powershell@sha256:[a-f0-9]{64}'
   }
 
   It 'rejects changed package bytes before extracting any module files' {

@@ -95,7 +95,7 @@ The draft PR records the exact reviewed tree/head and final test/CI results.
 
 Earlier native receipts remain valid only for their exact earlier bytes and
 measured boundaries. Neither those receipts nor this candidate's offline/CI
-results prove current Azure Files mounts, Container App runtime, managed-identity
+results prove current keyless Blob delivery, Container App runtime, managed-identity
 assessment, real report publication/access/retention, rollback or owned cleanup.
 Those are explicit issue #40/sub-mvp owner-run gates. No Azure authentication,
 resource mutation, permission grant, merge or release is performed by this work.

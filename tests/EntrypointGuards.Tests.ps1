@@ -225,6 +225,8 @@ Describe 'Setup entrypoint forwards the validated tenant through real Exchange t
     }
     function Get-MaesterSetupScopes { @('Application.Read.All') }
     function Get-MaesterSetupAccessPlan { throw 'Reached end of Exchange test boundary' }
+    # Migration inventory is covered separately; keep this fixture at its Exchange boundary.
+    function Assert-MaesterKeylessProvisioning { }
     function global:Invoke-MgGraphRequest { param($Method,$Uri) throw 'Unmocked Graph request' }
     function global:Connect-ExchangeOnline { param($AccessToken,$ShowBanner,$Organization) $global:ExchangeEntryState.Connected++; $AccessToken | Should -Be 'offline-outlook' }
     function global:New-ServicePrincipal { param($AppId,$ObjectId,$DisplayName) $global:ExchangeEntryState.ExchangeWrites++ }
@@ -237,7 +239,7 @@ Describe 'Setup entrypoint forwards the validated tenant through real Exchange t
       Metadata = @{ id = "/subscriptions/$sub"; subscriptionId = $sub; tenantId = $tenant; displayName = 'Selected'; state = 'Enabled' }
       Values = @{ AZURE_ENV_NAME = 'selected'; AZURE_SUBSCRIPTION_ID = $sub; AZURE_RESOURCE_GROUP = 'selected-group'; STORAGE_ACCOUNT_NAME = 'selectedstorage'; WEB_APP_ENABLED = 'false'; containerAppJobName = 'selected-job'; containerAppJobPrincipalId = '33333333-3333-4333-8333-333333333333' }
     }
-    Mock Import-Module {} -ParameterFilter { $Name -like '*Maester-SetupHelpers.psm1' -or $Name -like '*Maester-ConsentPlan.psm1' -or $Name -like '*Maester-SetupConsent.psm1' }
+    Mock Import-Module {} -ParameterFilter { $Name -like '*Maester-SetupHelpers.psm1' -or $Name -like '*Maester-ConsentPlan.psm1' -or $Name -like '*Maester-SetupConsent.psm1' -or $Name -like '*Maester-KeylessMigration.psm1' }
     Mock Assert-GraphAccess {}
     Mock Get-Module { [pscustomobject]@{ Name = 'ExchangeOnlineManagement' } } -ParameterFilter { $Name -eq 'ExchangeOnlineManagement' }
     Mock Invoke-GraphRestRequest {

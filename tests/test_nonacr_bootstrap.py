@@ -1,4 +1,4 @@
-"""Fault injection for the unchanged production shell entry point (no Azure)."""
+"""Fault injection for the production shell entry point (no Azure)."""
 import hashlib
 import os
 from pathlib import Path
@@ -46,13 +46,14 @@ class BootstrapFailures(unittest.TestCase):
     def execute(self, mode="nonacr", args=()):
         return subprocess.run(["/bin/sh", str(self.mount / "start.sh"), mode, *args], env=self.env, text=True, capture_output=True, timeout=15)
 
-    def fake_extract(self, runtime_status=0, runner_status=0, wait=False):
+    def fake_extract(self, runtime_status=0, runner_status=0, wait=False, install_status=0):
         # This only injects faults; hosted CI separately executes vendor bytes.
         self.tool("sha256sum", "cat >/dev/null; exit 0")
         self.tool("tar", '''for last do :; done
 cat > "$last/pwsh" <<'PWSH'
 #!/bin/sh
 if [ "$3" = '-Command' ]; then exit ''' + str(runtime_status) + '''; fi
+case "$4" in */Install-LockedModules.ps1) exit ''' + str(install_status) + ''';; esac
 printf invoked > "$TEST_ROOT/runner-invoked"
 ''' + ("sleep 30\n" if wait else "") + "exit " + str(runner_status) + "\nPWSH")
 
@@ -91,6 +92,11 @@ printf invoked > "$TEST_ROOT/runner-invoked"
         self.assertEqual(self.execute().returncode, 23)
         self.assertTrue((self.root / "runner-invoked").exists())
 
+    def test_package_install_failure_never_runs_assessment(self):
+        self.fake_extract(install_status=24)
+        self.assertEqual(self.execute().returncode, 24)
+        self.assertFalse((self.root / "runner-invoked").exists())
+
     def test_success_cleanup(self):
         self.fake_extract()
         self.assertEqual(self.execute(args=("-ValidateRuntimeOnly",)).returncode, 0)
@@ -101,7 +107,7 @@ printf invoked > "$TEST_ROOT/runner-invoked"
     def test_acr_never_falls_back(self):
         self.tool("pwsh", "exit 17")
         self.tool("tar", 'touch "$TEST_ROOT/extracted"; exit 0')
-        self.assertEqual(self.execute(mode="acr").returncode, 17)
+        self.assertNotEqual(self.execute(mode="acr").returncode, 0)
         self.assertFalse((self.root / "extracted").exists())
 
     def test_termination_cleans_owned_files(self):

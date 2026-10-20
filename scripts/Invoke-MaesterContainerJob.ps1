@@ -1,4 +1,4 @@
-#Requires -Version 7.6
+﻿#Requires -Version 7.6
 # Invoke-MaesterContainerJob.ps1
 # Runner script for the Container App Job. Mounted via Azure Files volume.
 # Reads configuration from environment variables set on the Container App Job.
@@ -174,13 +174,12 @@ function Publish-WebAppContent {
 }
 
 # ──────────────────────────────────────────────
-# Bootstrap exact, hash-verified runtime modules if using the public base image.
+# Require the exact modules installed from the immutable bundle or ACR image.
 # ──────────────────────────────────────────────
 
 Write-Output "Starting Maester container job at $(Get-Date -Format 'u')"
 
 $lockPath = Join-Path $PSScriptRoot 'runtime-packages.lock.json'
-$installerPath = Join-Path $PSScriptRoot 'Install-LockedModules.ps1'
 $packageLock = Get-Content -LiteralPath $lockPath -Raw -ErrorAction Stop | ConvertFrom-Json
 $moduleVersions = @{}
 foreach ($package in $packageLock.packages) { $moduleVersions[[string]$package.name] = [string]$package.version }
@@ -226,12 +225,7 @@ foreach ($moduleName in $requiredModules) {
   if ($installed.Count -eq 0) { $missing += $moduleName }
 }
 if ($missing.Count -gt 0) {
-  $userModuleRoot = Join-Path $HOME '.local/share/powershell/Modules'
-  try {
-    & $installerPath -LockPath $lockPath -DestinationRoot $userModuleRoot -ErrorAction Stop
-    if (-not $?) { throw 'Locked module installation failed.' }
-  }
-  catch { throw "Locked module installation failed: $($_.Exception.Message)" }
+  throw "Required locked modules are missing from the immutable runtime: $($missing -join ', ')."
 }
 foreach ($moduleName in $requiredModules) {
   if (-not @(Get-Module -ListAvailable -Name $moduleName | Where-Object { $_.Version -eq [version]$moduleVersions[$moduleName] }).Count) {
