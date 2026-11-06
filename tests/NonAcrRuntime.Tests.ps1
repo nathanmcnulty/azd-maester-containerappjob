@@ -4,7 +4,15 @@ BeforeAll {
   function global:az {
     $global:LASTEXITCODE = 0
     if (($args[0..2] -join ' ') -eq 'storage account show') { return ($global:RuntimeTest.Storage | ConvertTo-Json -Compress) }
-    if (($args[0..1] -join ' ') -eq 'account get-access-token') { return $global:RuntimeTest.Token }
+    if (($args[0..1] -join ' ') -eq 'account get-access-token') {
+      $global:RuntimeTest.TokenArguments = @($args)
+      # Azure CLI rejects these mutually exclusive selectors before acquiring a token.
+      if ('--subscription' -in $args -and '--tenant' -in $args) {
+        $global:LASTEXITCODE = 1
+        return $null
+      }
+      return $global:RuntimeTest.Token
+    }
     throw 'Unexpected external command.'
   }
 }
@@ -77,7 +85,30 @@ Describe 'Content-addressed keyless runtime publisher' {
 Describe 'Verified operator tokens' {
   BeforeEach {
     Mock Get-AzCliSubscriptionContext -ModuleName Maester-RuntimeFiles { @{} }
-    $global:RuntimeTest = @{ Token = '' }
+    $global:RuntimeTest = @{ Token = ''; TokenArguments = @() }
+  }
+  It 'uses one CLI selector after validating both target identifiers: <Resource>' -ForEach @(
+    @{ Resource = 'https://storage.azure.com/' },
+    @{ Resource = 'https://management.azure.com/' }
+  ) {
+    $claims = @{ tid = 'tenant'; oid = 'operator'; aud = $Resource; exp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() + 3600 }
+    $payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($claims | ConvertTo-Json -Compress))).TrimEnd('=').Replace('+','-').Replace('/','_')
+    $global:RuntimeTest.Token = "header.$payload.signature"
+    & (Get-Module Maester-RuntimeFiles) {
+      param($Resource)
+      Get-MaesterPublisherToken -SubscriptionId sub -TenantId tenant -OperatorObjectId operator -Resource $Resource
+    } $Resource | Should -BeExactly $global:RuntimeTest.Token
+    $arguments = $global:RuntimeTest.TokenArguments
+    $arguments | Should -Contain '--subscription'
+    $arguments[[array]::IndexOf($arguments, '--subscription') + 1] | Should -BeExactly 'sub'
+    $arguments | Should -Not -Contain '--tenant'
+    $arguments[[array]::IndexOf($arguments, '--resource') + 1] | Should -BeExactly $Resource
+    Should -Invoke Get-AzCliSubscriptionContext -ModuleName Maester-RuntimeFiles -Times 1 -Exactly -ParameterFilter { $SubscriptionId -eq 'sub' -and $TenantId -eq 'tenant' }
+  }
+  It 'rejects a mismatched selected tenant before invoking the CLI token command' {
+    Mock Get-AzCliSubscriptionContext -ModuleName Maester-RuntimeFiles { throw 'Selected tenant differs' }
+    { & (Get-Module Maester-RuntimeFiles) { Get-MaesterPublisherToken -SubscriptionId sub -TenantId tenant -OperatorObjectId operator } } | Should -Throw '*Selected tenant differs*'
+    $global:RuntimeTest.TokenArguments.Count | Should -Be 0
   }
   It 'binds token to tenant, operator, resource, and expiry: <Case>' -ForEach @(@{Case='valid'}, @{Case='tenant'}, @{Case='operator'}, @{Case='audience'}, @{Case='expiry'}, @{Case='malformed'}) {
     $claims = @{ tid = 'tenant'; oid = 'operator'; aud = 'https://storage.azure.com'; exp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() + 3600 }

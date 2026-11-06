@@ -23,8 +23,7 @@ Describe 'Setup publishes runtime files through the real target-guarded publishe
         return ($s.Metadata | ConvertTo-Json -Compress)
       }
       if ($a[0] -eq 'account' -and $a[1] -eq 'get-access-token') {
-        if ('--tenant' -notin $a) { return 'offline-arm' }
-        if ($a[([array]::IndexOf($a, '--tenant') + 1)] -ne $s.Tenant) { throw 'Wrong token tenant' }
+        if ('--tenant' -in $a) { throw 'Azure CLI token selectors are mutually exclusive' }
         $audience = $a[([array]::IndexOf($a, '--resource') + 1)]
         $claims = @{ tid = $s.Tenant; oid = $(if ($s.TokenOperator) { $s.TokenOperator } else { $s.Operator }); aud = $audience; exp = [DateTimeOffset]::UtcNow.AddHours(1).ToUnixTimeSeconds() } | ConvertTo-Json -Compress
         return 'header.' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($claims)).TrimEnd('=').Replace('+','-').Replace('/','_') + '.signature'

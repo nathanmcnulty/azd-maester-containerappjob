@@ -84,7 +84,9 @@ function New-MaesterRuntimeBundle {
 function Get-MaesterPublisherToken {
   param([string]$SubscriptionId, [string]$TenantId, [string]$OperatorObjectId, [string]$Resource = 'https://storage.azure.com/')
   $null = Get-AzCliSubscriptionContext -SubscriptionId $SubscriptionId -TenantId $TenantId
-  $token = (& az account get-access-token --subscription $SubscriptionId --tenant $TenantId --resource $Resource --query accessToken --output tsv --only-show-errors 2>$null) -join ''
+  # CLI target selectors are mutually exclusive. The selected subscription's
+  # tenant is checked above and independently bound to the returned claims below.
+  $token = (& az account get-access-token --subscription $SubscriptionId --resource $Resource --query accessToken --output tsv --only-show-errors 2>$null) -join ''
   try {
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($token)) { throw 'Token unavailable.' }
     $parts = $token.Split('.')
