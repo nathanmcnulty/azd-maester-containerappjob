@@ -25,6 +25,15 @@ The original multi-variant catalog remains available at
 [`nathanmcnulty/azd-maester`](https://github.com/nathanmcnulty/azd-maester) while
 the migration is being completed.
 
+Ordinary assessments prepare a private copy of the bundled tests before
+discovery. An exact hash-bound correction keeps Conditional Access What-If user
+collections as arrays and handles empty Pester 6.2 contexts while retaining the
+existing tests and request arguments. The installed module/package stays
+unchanged; unknown upstream content stops the assessment. A
+`MAESTER_TEST_COMPATIBILITY_V1` record reports the original and effective hashes.
+Runtime-only validation and the separate approved-drift path do not run this
+ordinary-assessment preparation.
+
 During interactive `azd up`, the preprovision wizard prompts for:
 
 - Include Web App / Exchange / Teams / Azure / ACR
