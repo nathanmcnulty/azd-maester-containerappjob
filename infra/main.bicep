@@ -8,6 +8,8 @@ param location string
 
 param environmentName string = 'dev'
 param resourceGroupName string
+@description('Exact group metadata captured by the ownership-aware preprovision hook; required before deployment.')
+param resourceGroupMetadataJson string = '{}'
 param imageName string = 'mcr.microsoft.com/azure-powershell@sha256:3459545c448b8ae639370b3cf46e1816a3d68a045e45b96ba25e46e8de815581'
 param userAssignedIdentityResourceId string = ''
 param enableResourceLocks bool = true
@@ -21,9 +23,14 @@ param jobTriggerType string = 'Schedule'
 param mailRecipient string = ''
 param webAppSkuName string = 'F1'
 
-// The ownership hook is the only group creator. Never adopt or overwrite tags.
-resource targetGroup 'Microsoft.Resources/resourceGroups@2022-09-01' existing = {
+// The hook creates/captures the group first. Declare it so azd down can discover
+// it, preserving the captured location and all tags, including ownership.
+// Missing hook metadata fails expression evaluation before changing the group.
+var groupMetadata = json(resourceGroupMetadataJson)
+resource targetGroup 'Microsoft.Resources/resourceGroups@2022-09-01' = {
   name: resourceGroupName
+  location: groupMetadata.location
+  tags: groupMetadata.tags
 }
 
 module maester 'resources.bicep' = {

@@ -7,7 +7,8 @@ Describe 'Ownership-aware azd subscription entry point' {
     & $bicep build (Join-Path $root 'infra/main.bicep') --outfile $path
     if ($LASTEXITCODE -ne 0) { throw 'azd entry point compilation failed.' }
     $compiled = Get-Content $path -Raw | ConvertFrom-Json -AsHashtable
-    $deployment = @($compiled.resources)[0]
+    $deployment = @($compiled.resources | Where-Object type -eq 'Microsoft.Resources/deployments')[0]
+    $group = @($compiled.resources | Where-Object type -eq 'Microsoft.Resources/resourceGroups')[0]
     $inner = $deployment.properties.template
     $mapping = Get-Content (Join-Path $root 'infra/main.parameters.json') -Raw | ConvertFrom-Json -AsHashtable
     $originalMapping = @{ parameters = @{
@@ -23,10 +24,15 @@ Describe 'Ownership-aware azd subscription entry point' {
     } }
   }
 
-  It 'initializes azd at subscription scope without declaring or adopting a resource group' {
+  It 'declares the group for azd teardown discovery while preserving hook-captured metadata' {
     (Get-Content (Join-Path $root 'azure.yaml') -Raw) | Should -Not -Match '(?m)^  module:'
     $compiled.'$schema' | Should -Match '/subscriptionDeploymentTemplate.json#'
-    $compiled.resources.Count | Should -Be 1
+    $compiled.resources.Count | Should -Be 2
+    $group.name | Should -BeExactly "[parameters('resourceGroupName')]"
+    $compiled.variables.groupMetadata | Should -BeExactly "[json(parameters('resourceGroupMetadataJson'))]"
+    $group.location | Should -BeExactly "[variables('groupMetadata').location]"
+    $group.tags | Should -BeExactly "[variables('groupMetadata').tags]"
+    $deployment.dependsOn | Should -Contain "[subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))]"
     $deployment.type | Should -BeExactly 'Microsoft.Resources/deployments'
     $deployment.resourceGroup | Should -BeExactly "[parameters('resourceGroupName')]"
     $deployment.properties.expressionEvaluationOptions.scope | Should -BeExactly 'inner'
@@ -41,7 +47,8 @@ Describe 'Ownership-aware azd subscription entry point' {
         $compiled.parameters[$name].defaultValue | Should -BeExactly $inner.parameters[$name].defaultValue
       }
     }
-    $mapping.parameters.Count | Should -Be ($originalMapping.parameters.Count + 2)
+    $mapping.parameters.Count | Should -Be ($originalMapping.parameters.Count + 3)
+    $mapping.parameters.resourceGroupMetadataJson.value | Should -BeExactly '${MAESTER_RESOURCE_GROUP_METADATA}'
     $mapping.parameters.location.value | Should -BeExactly '${AZURE_LOCATION}'
     $mapping.parameters.resourceGroupName.value | Should -BeExactly '${AZURE_RESOURCE_GROUP}'
     ($deployment.properties.parameters.Keys | Sort-Object) -join ',' | Should -BeExactly (($inner.parameters.Keys | Sort-Object) -join ',')
