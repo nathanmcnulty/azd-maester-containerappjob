@@ -12,8 +12,8 @@ Describe 'Resource-group metadata preservation before ARM declaration' {
     function global:azd {
       $a = @($args); $global:LASTEXITCODE = 0
       if (($a -join ' ') -eq 'env get-values -e group-test --output json') { return ($global:GroupMetadataFixture.Values | ConvertTo-Json -Compress) }
-      if ($a.Count -eq 6 -and ($a[0..2] -join ' ') -eq 'env set MAESTER_RESOURCE_GROUP_METADATA' -and $a[4] -eq '-e' -and $a[5] -eq 'group-test') {
-        $global:GroupMetadataFixture.Writes.Add(($a[3] | ConvertFrom-Json -AsHashtable)); return
+      if ($a.Count -eq 6 -and ($a[0..2] -join ' ') -eq 'env set MAESTER_RESOURCE_GROUP_METADATA_BASE64' -and $a[4] -eq '-e' -and $a[5] -eq 'group-test') {
+        $global:GroupMetadataFixture.WireValues.Add([string]$a[3]); $global:GroupMetadataFixture.Writes.Add(([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($a[3])) | ConvertFrom-Json -AsHashtable)); return
       }
       throw 'Unexpected local environment command'
     }
@@ -26,7 +26,7 @@ Describe 'Resource-group metadata preservation before ARM declaration' {
   BeforeEach {
     $sub='11111111-1111-4111-8111-111111111111';$tenant='22222222-2222-4222-8222-222222222222'
     $id="/subscriptions/$sub/resourceGroups/rg-group-test"
-    $global:GroupMetadataFixture=@{Sub=$sub;Tenant=$tenant;Id=$id;Reads=0;ReadFailure=$false;Writes=[Collections.Generic.List[object]]::new();Values=@{AZURE_ENV_NAME='group-test';AZURE_SUBSCRIPTION_ID=$sub;AZURE_TENANT_ID=$tenant;AZURE_RESOURCE_GROUP='rg-group-test'};Group=@{id=$id;name='rg-group-test';location='eastus2';tags=@{'maester-ownership-id'='33333333-3333-4333-8333-333333333333';'azd-env-name'='group-test';'existing-owner'='preserve';'unicode'='équipe'};properties=@{provisioningState='Succeeded'}}}
+    $global:GroupMetadataFixture=@{Sub=$sub;Tenant=$tenant;Id=$id;Reads=0;ReadFailure=$false;Writes=[Collections.Generic.List[object]]::new();WireValues=[Collections.Generic.List[string]]::new();Values=@{AZURE_ENV_NAME='group-test';AZURE_SUBSCRIPTION_ID=$sub;AZURE_TENANT_ID=$tenant;AZURE_RESOURCE_GROUP='rg-group-test'};Group=@{id=$id;name='rg-group-test';location='eastus2';tags=@{'maester-ownership-id'='33333333-3333-4333-8333-333333333333';'azd-env-name'='group-test';'existing-owner'='preserve';'unicode'='équipe'};properties=@{provisioningState='Succeeded'}}}
     $project=Join-Path $TestDrive ([guid]::NewGuid().ToString('N'));$null=New-Item -ItemType Directory -Path (Join-Path $project '.azure/group-test')
     $receiptPath=Join-Path $project '.azure/group-test/maester-infrastructure-ownership.json'
     @{state='Created';ownershipId='33333333-3333-4333-8333-333333333333';binding=@{environmentName='group-test';subscriptionId=$sub;tenantId=$tenant;resourceGroupId=$id}}|ConvertTo-Json -Depth 5|Set-Content $receiptPath
@@ -44,6 +44,18 @@ Describe 'Resource-group metadata preservation before ARM declaration' {
     ($saved.tags|ConvertTo-Json -Compress) | Should -BeExactly ($global:GroupMetadataFixture.Group.tags|ConvertTo-Json -Compress)
     (Get-FileHash $receiptPath).Hash | Should -BeExactly $before
     Should -Invoke Get-AzCliSubscriptionContext -ModuleName Maester-ResourceGroupMetadata -Exactly 1 -ParameterFilter {$SubscriptionId -eq $global:GroupMetadataFixture.Sub -and $TenantId -eq $global:GroupMetadataFixture.Tenant}
+  }
+  It 'survives raw azd parameter substitution with quotes, backslashes and Unicode tags' {
+    $global:GroupMetadataFixture.Group.tags['special'] = 'équipe "quoted" C:\path\item ${literal}'
+    Set-MaesterResourceGroupMetadata @parameters
+    $wire = $global:GroupMetadataFixture.WireValues[0]
+    $wire | Should -Match '^[A-Za-z0-9+/]+={0,2}$'
+    $mappingText = Get-Content (Join-Path $root 'infra/main.parameters.json') -Raw
+    $resolved = $mappingText.Replace('${MAESTER_RESOURCE_GROUP_METADATA_BASE64}', $wire) | ConvertFrom-Json -AsHashtable
+    $decoded = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($resolved.parameters.resourceGroupMetadataBase64.value)) | ConvertFrom-Json -AsHashtable
+    $decoded.tags.special | Should -BeExactly $global:GroupMetadataFixture.Group.tags.special
+    $decoded.id | Should -BeExactly $parameters.ResourceGroupId
+    $decoded.location | Should -BeExactly 'eastus2'
   }
   It 'preserves an unowned existing group without adding ownership' {
     $parameters.FreshOwned=$false;$global:GroupMetadataFixture.Group.tags=@{'existing-owner'='other-owner'}

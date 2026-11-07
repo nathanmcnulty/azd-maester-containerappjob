@@ -53,9 +53,12 @@ function Set-MaesterResourceGroupMetadata {
     }
   }
   $snapshot = [ordered]@{ id = $expectedId; location = $group['location']; tags = $tags }
+  # azd expands environment placeholders as raw text inside the parameters JSON.
+  # Base64 keeps JSON quotes, backslashes and Unicode intact at that boundary.
+  $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($snapshot | ConvertTo-Json -Depth 5 -Compress)))
   Push-Location -LiteralPath $ProjectRoot
   try {
-    & azd env set MAESTER_RESOURCE_GROUP_METADATA ($snapshot | ConvertTo-Json -Depth 5 -Compress) -e $EnvironmentName
+    & azd env set MAESTER_RESOURCE_GROUP_METADATA_BASE64 $encoded -e $EnvironmentName
     if ($LASTEXITCODE -ne 0) { throw 'Could not save selected resource-group metadata.' }
   } finally { Pop-Location }
 }

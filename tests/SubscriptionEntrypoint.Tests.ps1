@@ -29,7 +29,7 @@ Describe 'Ownership-aware azd subscription entry point' {
     $compiled.'$schema' | Should -Match '/subscriptionDeploymentTemplate.json#'
     $compiled.resources.Count | Should -Be 2
     $group.name | Should -BeExactly "[parameters('resourceGroupName')]"
-    $compiled.variables.groupMetadata | Should -BeExactly "[json(parameters('resourceGroupMetadataJson'))]"
+    $compiled.variables.groupMetadata | Should -BeExactly "[json(base64ToString(parameters('resourceGroupMetadataBase64')))]"
     $group.location | Should -BeExactly "[variables('groupMetadata').location]"
     $group.tags | Should -BeExactly "[variables('groupMetadata').tags]"
     $deployment.dependsOn | Should -Contain "[subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))]"
@@ -48,7 +48,7 @@ Describe 'Ownership-aware azd subscription entry point' {
       }
     }
     $mapping.parameters.Count | Should -Be ($originalMapping.parameters.Count + 3)
-    $mapping.parameters.resourceGroupMetadataJson.value | Should -BeExactly '${MAESTER_RESOURCE_GROUP_METADATA}'
+    $mapping.parameters.resourceGroupMetadataBase64.value | Should -BeExactly '${MAESTER_RESOURCE_GROUP_METADATA_BASE64}'
     $mapping.parameters.location.value | Should -BeExactly '${AZURE_LOCATION}'
     $mapping.parameters.resourceGroupName.value | Should -BeExactly '${AZURE_RESOURCE_GROUP}'
     ($deployment.properties.parameters.Keys | Sort-Object) -join ',' | Should -BeExactly (($inner.parameters.Keys | Sort-Object) -join ',')

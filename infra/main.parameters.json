@@ -35,8 +35,8 @@
     "resourceGroupName": {
       "value": "${AZURE_RESOURCE_GROUP}"
     },
-    "resourceGroupMetadataJson": {
-      "value": "${MAESTER_RESOURCE_GROUP_METADATA}"
+    "resourceGroupMetadataBase64": {
+      "value": "${MAESTER_RESOURCE_GROUP_METADATA_BASE64}"
     }
   }
 }
