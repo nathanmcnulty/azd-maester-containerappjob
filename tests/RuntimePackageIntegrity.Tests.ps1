@@ -4,7 +4,7 @@ Describe 'Container runtime package integrity' {
     $installer = Join-Path $repoRoot 'scripts/Install-LockedModules.ps1'
     $lock = Get-Content -LiteralPath (Join-Path $repoRoot 'runtime-packages.lock.json') -Raw | ConvertFrom-Json
     $dockerfile = Get-Content -LiteralPath (Join-Path $repoRoot 'Dockerfile') -Raw
-    $infra = Get-Content -LiteralPath (Join-Path $repoRoot 'infra/main.bicep') -Raw
+    $infra = Get-Content -LiteralPath (Join-Path $repoRoot 'infra/resources.bicep') -Raw
   }
 
   It 'locks every module to an exact version and SHA-256 package digest' {

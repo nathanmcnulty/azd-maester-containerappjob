@@ -5,7 +5,7 @@ Describe 'Compiled keyless runtime infrastructure' {
     if (-not $bicep) { $bicep = (Get-Command bicep -ErrorAction SilentlyContinue).Source }
     if (-not $bicep -or -not (Test-Path -LiteralPath $bicep -PathType Leaf)) { throw 'Set BICEP_CLI_PATH to the Bicep CLI executable.' }
     $compiledPath = Join-Path $TestDrive 'keyless.json'
-    & $bicep build (Join-Path $root 'infra/main.bicep') --outfile $compiledPath
+    & $bicep build (Join-Path $root 'infra/resources.bicep') --outfile $compiledPath
     if ($LASTEXITCODE -ne 0) { throw 'Production Bicep compilation failed.' }
     $compiledText = Get-Content $compiledPath -Raw
     $compiled = $compiledText | ConvertFrom-Json -AsHashtable

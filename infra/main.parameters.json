@@ -28,6 +28,12 @@
     },
     "webAppSkuName": {
       "value": "${WEB_APP_SKU}"
+    },
+    "location": {
+      "value": "${AZURE_LOCATION}"
+    },
+    "resourceGroupName": {
+      "value": "${AZURE_RESOURCE_GROUP}"
     }
   }
 }
