@@ -32,6 +32,10 @@ Invoke-MaesterPreProvision `
 # Capture infrastructure separately from optional Graph/setup. Only this hook's
 # exact HTTP 201 response can establish fresh dedicated resource-group ownership.
 Import-Module (Join-Path $PSScriptRoot 'vendor/Azd.MaesterHooks/Maester-InfrastructureOwnership.psm1') -Force
-Initialize-MaesterInfrastructureOwnership -ProjectRoot (Split-Path $PSScriptRoot -Parent) `
+$ownership = Initialize-MaesterInfrastructureOwnership -ProjectRoot (Split-Path $PSScriptRoot -Parent) `
   -EnvironmentName $env:AZURE_ENV_NAME -SolutionName 'container-app-job' `
-  -TenantId $TenantId -SubscriptionId $SubscriptionId | Out-Null
+  -TenantId $TenantId -SubscriptionId $SubscriptionId
+Import-Module (Join-Path $PSScriptRoot 'Maester-ResourceGroupMetadata.psm1') -Force
+Set-MaesterResourceGroupMetadata -ProjectRoot (Split-Path $PSScriptRoot -Parent) `
+  -EnvironmentName $env:AZURE_ENV_NAME -TenantId $TenantId -SubscriptionId $SubscriptionId `
+  -ResourceGroupId $ownership.ResourceGroupId -FreshOwned ([bool]$ownership.Owned) | Out-Null

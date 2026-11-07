@@ -28,6 +28,15 @@
     },
     "webAppSkuName": {
       "value": "${WEB_APP_SKU}"
+    },
+    "location": {
+      "value": "${AZURE_LOCATION}"
+    },
+    "resourceGroupName": {
+      "value": "${AZURE_RESOURCE_GROUP}"
+    },
+    "resourceGroupMetadataBase64": {
+      "value": "${MAESTER_RESOURCE_GROUP_METADATA_BASE64}"
     }
   }
 }

@@ -51,7 +51,7 @@ Describe 'Integrated validation candidate' {
     $source | Should -Not -Match '& \$installerPath|Install-Module|Save-Module'
   }
   It 'leaves scheduled infrastructure and bootstrap without drift opt-in' {
-    Get-Content (Join-Path $root 'infra/main.bicep') -Raw | Should -Not -Match 'EnableApprovedDrift|DriftInputRoot'
+    Get-Content (Join-Path $root 'infra/resources.bicep') -Raw | Should -Not -Match 'EnableApprovedDrift|DriftInputRoot'
     Get-Content (Join-Path $root 'scripts/Start-MaesterContainerJob.sh') -Raw | Should -Not -Match 'EnableApprovedDrift|DriftInputRoot'
   }
 }
