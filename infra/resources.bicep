@@ -125,7 +125,13 @@ param customTags object = {}
 var normalizedEnvironmentName = toLower(environmentName)
 var resourceSuffix = toLower(uniqueString(resourceGroup().id, environmentName))
 var managedEnvironmentName = 'cae-${substring(normalizedEnvironmentName, 0, min(length(normalizedEnvironmentName), 48))}-${substring(resourceSuffix, 0, 6)}'
-var containerAppJobName = 'caj-maester-${substring(normalizedEnvironmentName, 0, min(length(normalizedEnvironmentName), 12))}-${substring(resourceSuffix, 0, 6)}'
+// Keep the original 12-character prefix and stable suffix. Normalize only the
+// job segment, including a hyphen left at the cut point.
+var jobEnvironmentPrefix = take(normalizedEnvironmentName, 12)
+var jobEnvironmentCharacters = map(range(0, length(jobEnvironmentPrefix)), i => substring(jobEnvironmentPrefix, i, 1))
+var jobEnvironmentParts = split(join(map(jobEnvironmentCharacters, character => contains('abcdefghijklmnopqrstuvwxyz0123456789', character) ? character : '-'), ''), '-')
+var jobEnvironmentSegment = join(filter(jobEnvironmentParts, part => !empty(part)), '-')
+var containerAppJobName = 'caj-maester-${empty(jobEnvironmentSegment) ? 'job' : jobEnvironmentSegment}-${substring(resourceSuffix, 0, 6)}'
 var storageAccountName = 'stmaester${resourceSuffix}'
 var acrName = 'crmaester${resourceSuffix}'
 var storageBlobDataReaderRoleId = subscriptionResourceId(

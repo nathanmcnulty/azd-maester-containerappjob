@@ -47,6 +47,8 @@ The azd entry point is `infra/main.bicep` at subscription scope, with the resour
 
 The default azd launcher requires subscription deployment permissions in addition to the selected resource permissions. For automation limited to an existing resource group, `infra/resources.bicep` remains available for direct group-scoped deployment with its original parameters; that route does not exercise the default azd launcher. The default launcher refuses a group managed by another Azure resource. Existing groups are never silently adopted for automatic cleanup, and the ownership guard still blocks `azd down` without its original fresh-group receipt.
 
+Before creating a group or submitting a deployment, evaluate the selected template offline with [Bicep CLI snapshot](https://learn.microsoft.com/azure/azure-resource-manager/bicep/bicep-cli#snapshot). Prepare a scratch `.bicepparam` file for the selected environment and parameters, then run `bicep snapshot <file> --mode overwrite --subscription-id <subscription-id> --location <location>`. For `infra/main.bicep`, include the group name and planned Base64 group metadata as template parameters. For `infra/resources.bicep`, add `--resource-group <group-name>`. Check that `predictedResources` contains exactly one `Microsoft.App/jobs` resource whose name is 2–32 characters and matches `^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`. The job keeps its existing name when the original truncated prefix is already valid.
+
 ## Advanced options (optional)
 
 You can optionally enable additional data collection/connectivity for Maester by enabling one or more include options in the `azd up` wizard.
