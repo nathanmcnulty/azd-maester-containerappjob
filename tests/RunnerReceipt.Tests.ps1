@@ -11,6 +11,9 @@ Describe 'Maintained complete runner entrypoint evidence (offline)' {
     $moduleRoot = Join-Path $TestDrive 'Maester'
     New-Item -ItemType Directory (Join-Path $moduleRoot 'tests/Maester/Entra') -Force | Out-Null
     Set-Content (Join-Path $moduleRoot 'tests/fixture.Tests.ps1') '# offline fixture, never executed'
+    # The complete runner prepares the actual locked What-If test before its
+    # mocked Invoke-Maester call; retain real upstream bytes at that boundary.
+    Copy-Item (Join-Path $PSScriptRoot 'fixtures/maester-230/WhatIfDiscovery.ps1') (Join-Path $moduleRoot 'tests/Maester/Entra/Test-ConditionalAccessWhatIf.Tests.ps1')
     $fixtureVersions = @{}
     (Get-Content (Join-Path $staged 'runtime-packages.lock.json') -Raw | ConvertFrom-Json).packages | ForEach-Object { $fixtureVersions[$_.name]=$_.version }
     $envNames = @('TEMP','TMPDIR','STORAGE_ACCOUNT_NAME','INCLUDE_EXCHANGE','INCLUDE_TEAMS','INCLUDE_AZURE','MAIL_RECIPIENT','WEB_APP_NAME','WEB_APP_RESOURCE_GROUP_NAME','CONTAINER_APP_JOB_EXECUTION_NAME')

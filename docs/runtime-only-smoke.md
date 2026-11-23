@@ -15,7 +15,7 @@ consent hooks, Graph setup, assessments, or mail for this smoke.
   Verify the locked engine and packages, then record and approve the generated
   SHA-256, byte size and `bundles/<sha256>.zip` name. If reproducing an approved
   artifact, a different hash or size requires review, not silent replacement.
-- Use the digest-pinned bootstrap image from `infra/main.bicep`. Set
+- Use the digest-pinned bootstrap image from `infra/resources.bicep`. Set
   `POWERSHELL_TELEMETRY_OPTOUT=1` and `DOTNET_CLI_TELEMETRY_OPTOUT=1` before tools
   or engines start. Never print identity headers, tokens or full environments.
 - Create a fresh uniquely marked resource group. Capture the actual HTTP 201

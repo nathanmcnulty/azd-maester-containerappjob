@@ -3,3 +3,7 @@ azd-components.lock.json text eol=lf
 scripts/Setup-PostDeploy.ps1 text eol=lf
 
 *.sh text eol=lf
+scripts/Invoke-MaesterContainerJob.ps1 text eol=lf
+tests/fixtures/maester-230/** text eol=lf
+scripts/Maester-SetupConsent.psm1 text eol=lf
+scripts/Run-AzdPostDown.ps1 text eol=lf
