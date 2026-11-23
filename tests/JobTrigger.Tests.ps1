@@ -6,7 +6,7 @@ Describe 'Compiled job trigger contract' {
     if (-not $bicep) { $bicep = (Get-Command bicep -ErrorAction SilentlyContinue).Source }
     if (-not $bicep -or -not (Test-Path -LiteralPath $bicep -PathType Leaf)) { throw 'Set BICEP_CLI_PATH to the Bicep CLI executable.' }
     $compiledPath = Join-Path $TestDrive 'main.json'
-    & $bicep build (Join-Path $root 'infra/main.bicep') --outfile $compiledPath
+    & $bicep build (Join-Path $root 'infra/resources.bicep') --outfile $compiledPath
     if ($LASTEXITCODE -ne 0) { throw 'Production Bicep compilation failed.' }
     $compiled = Get-Content $compiledPath -Raw | ConvertFrom-Json -AsHashtable
     $job = @($compiled.resources | Where-Object type -eq 'Microsoft.App/jobs')

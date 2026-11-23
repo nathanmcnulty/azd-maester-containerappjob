@@ -7,7 +7,7 @@ $PSNativeCommandUseErrorActionPreference = $false
 $projectRoot = Split-Path $PSScriptRoot -Parent
 Import-Module (Join-Path $PSScriptRoot 'Maester-RuntimeFiles.psm1') -Force
 . (Join-Path $PSScriptRoot 'Get-MaesterRuntimeBundle.ps1')
-$infra = Get-Content (Join-Path $projectRoot 'infra/main.bicep') -Raw
+$infra = Get-Content (Join-Path $projectRoot 'infra/resources.bicep') -Raw
 $image = [regex]::Match($infra, "param imageName string = '([^']+)'").Groups[1].Value
 if ($image -notmatch '^mcr.microsoft.com/azure-powershell@sha256:[a-f0-9]{64}$') { throw 'Expected digest-pinned production bootstrap image.' }
 $owned = Join-Path ([IO.Path]::GetTempPath()) ('maester-ci-' + [guid]::NewGuid().ToString('N'))
