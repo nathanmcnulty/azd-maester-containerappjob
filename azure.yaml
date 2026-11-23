@@ -1,6 +1,8 @@
 name: azd-maester-containerappjob
 metadata:
   template: azd-maester-containerappjob@0.1.0
+# infra/main.parameters.json maps JOB_TRIGGER_TYPE to the Bicep jobTriggerType.
+# Unset: Manual (no schedule). Set JOB_TRIGGER_TYPE=Schedule for weekly runs.
 infra:
   provider: bicep
   path: infra
@@ -20,12 +22,18 @@ hooks:
     continueOnError: false
   postprovision:
     shell: pwsh
-    run: ./scripts/Run-AzdPostProvision.ps1
+    run: ./scripts/Run-AzdPostProvision.ps1 -InteractiveConsent
     interactive: true
     continueOnError: false
   predown:
     shell: pwsh
-    run: ./scripts/Run-AzdPreDown.ps1
+    run: ./scripts/Run-AzdPreDown.ps1 -InteractiveConsent
+    interactive: true
+    continueOnError: false
+
+  postdown:
+    shell: pwsh
+    run: ./scripts/Run-AzdPostDown.ps1 -InteractiveConsent
     interactive: true
     continueOnError: false
 

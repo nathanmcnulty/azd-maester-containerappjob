@@ -4,6 +4,9 @@ param(
   [string]$SubscriptionId,
 
   [Parameter(Mandatory = $false)]
+  [string]$TenantId,
+
+  [Parameter(Mandatory = $false)]
   [string]$ResourceGroupName,
 
   [Parameter(Mandatory = $false)]
@@ -35,6 +38,12 @@ if (-not $EnvironmentName) {
 
 $resolvedResourceGroupName = if ($ResourceGroupName) { $ResourceGroupName } elseif ($env:AZURE_RESOURCE_GROUP) { $env:AZURE_RESOURCE_GROUP } else { "rg-$EnvironmentName" }
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+
+Import-Module (Join-Path $PSScriptRoot 'vendor/Azd.MaesterHooks/Maester-SetupHelpers.psm1') -Force
+if (-not $TenantId) { $TenantId = $env:AZURE_TENANT_ID }
+if ([string]::IsNullOrWhiteSpace($TenantId)) { throw 'TenantId is required. Pass -TenantId or set AZURE_TENANT_ID.' }
+$azAccount = Get-AzCliSubscriptionContext -SubscriptionId $SubscriptionId -TenantId $TenantId
+$TenantId = $azAccount.tenantId
 
 # Discover ACR in the resource group
 $acrListJson = & az acr list --resource-group $resolvedResourceGroupName --query '[].{name:name,loginServer:loginServer,tags:tags}' -o json --subscription $SubscriptionId
@@ -118,6 +127,9 @@ if (-not $jobPayload -or -not $jobPayload.properties.template.containers) {
 Write-Host "Building and pushing Maester image to ACR '$acrName'..."
 Write-Host "Image: $imageFqdn"
 
+# Revalidate immediately before the remote build, after discovery.
+$null = Get-AzCliSubscriptionContext -SubscriptionId $SubscriptionId -TenantId $TenantId
+
 # Build remotely using az acr build (no local Docker required)
 & az acr build `
   --registry $acrName `
@@ -170,6 +182,8 @@ $updateBody = @{
   properties = $jobPayload.properties
 } | ConvertTo-Json -Depth 30 -Compress
 
+# A remote build can take minutes; never reuse its initial subscription state.
+$null = Get-AzCliSubscriptionContext -SubscriptionId $SubscriptionId -TenantId $TenantId
 try {
   Invoke-RestMethod -Method PUT -Uri "https://management.azure.com$jobPath" -Headers $armHeaders -Body $updateBody -ContentType 'application/json' | Out-Null
 }

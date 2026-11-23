@@ -19,8 +19,15 @@ param(
   [string]$SecurityGroupDisplayName,
 
   [Parameter(Mandatory = $false)]
-  [ValidateSet('Minimal', 'Extended')]
-  [string]$PermissionProfile = 'Extended'
+  [ValidateSet('Minimal', 'Full', 'Extended')]
+  [string]$PermissionProfile = 'Full',
+  [switch]$Apply,
+  [string]$ApprovedPlanHash,
+  [switch]$InteractiveConsent,
+  [switch]$AllowInteractiveGraphLogin,
+  [switch]$AllowGraphContextReplacement,
+  [switch]$IncludeMailSend,
+  [switch]$IncludeReportSettingsWrite
 )
 
 Set-StrictMode -Version Latest
@@ -80,6 +87,17 @@ if (-not $PSBoundParameters.ContainsKey('PermissionProfile') -and $env:PERMISSIO
   $PermissionProfile = $env:PERMISSION_PROFILE
 }
 
+# Capture infrastructure ownership before optional setup can be declined or fail.
+$ownershipRoot = Split-Path $PSScriptRoot -Parent
+$infrastructureReceipt = Join-Path $ownershipRoot ".azure/$EnvironmentName/maester-infrastructure-ownership.json"
+if (Test-Path -LiteralPath $infrastructureReceipt) {
+  Import-Module (Join-Path $PSScriptRoot 'vendor/Azd.MaesterHooks/Maester-InfrastructureOwnership.psm1') -ErrorAction Stop
+  Complete-MaesterInfrastructureOwnership -ProjectRoot $ownershipRoot -EnvironmentName $EnvironmentName -SolutionName 'container-app-job' `
+    -TenantId $TenantId -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName
+} else {
+  Write-Warning 'No fresh infrastructure ownership receipt exists. Existing deployment behavior is preserved; automatic down requires explicit ownership recovery.'
+}
+
 Write-Host 'Running postprovision setup...'
 
 $setupParams = @{
@@ -98,7 +116,13 @@ if ($SecurityGroupDisplayName) {
   $setupParams['SecurityGroupDisplayName'] = $SecurityGroupDisplayName
 }
 
-& "$PSScriptRoot\Setup-PostDeploy.ps1" @setupParams
+foreach ($name in @('Apply', 'ApprovedPlanHash', 'InteractiveConsent', 'AllowInteractiveGraphLogin', 'AllowGraphContextReplacement', 'IncludeMailSend', 'IncludeReportSettingsWrite')) {
+  if ($PSBoundParameters.ContainsKey($name)) { $setupParams[$name] = $PSBoundParameters[$name] }
+}
+$setupResult = & "$PSScriptRoot\Setup-PostDeploy.ps1" @setupParams
+if ($setupResult -and $setupResult.PSObject.Properties['capability'] -and $setupResult.capability -eq 'DeploymentSetupAccess') {
+  return $setupResult
+}
 
 $easyAuthAppObjectId = 'n/a'
 $easyAuthAppClientIdFromEnv = 'n/a'
@@ -158,8 +182,6 @@ if ($envValues.Count -gt 0) {
   if (-not [string]::IsNullOrWhiteSpace($azureRoleIdsValue)) { $azureRoleAssignmentIdsFromEnv = $azureRoleIdsValue }
   if (-not [string]::IsNullOrWhiteSpace($exoSpDisplayNameValue)) { $exoServicePrincipalDisplayNameFromEnv = $exoSpDisplayNameValue }
 }
-
-Write-Host 'Running postprovision job validation...'
 
 # When Exchange or Teams permissions were just provisioned, poll Graph API
 # to verify the app role assignments are visible before triggering validation.
@@ -221,7 +243,26 @@ if ($TenantId) {
 
 $testParams['PassThru'] = $true
 
-$validationResult = & "$PSScriptRoot\Invoke-JobValidation.ps1" @testParams
+$validationScriptPath = Join-Path $PSScriptRoot 'Invoke-JobValidation.ps1'
+$validationAction = {
+  param($validationOptions)
+  if ($validationOptions.RequireNoMail) { $testParams['RequireNoMail'] = $true }
+  & $validationScriptPath @testParams
+}.GetNewClosure()
+$validationPolicyPath = Join-Path $PSScriptRoot 'Maester-PostProvisionValidation.psm1'
+Import-Module $validationPolicyPath -Force
+$validationResult = Invoke-MaesterPostProvisionValidation `
+  -JobTriggerType (Get-EnvValue -Lines $envValues -Name 'JOB_TRIGGER_TYPE') `
+  -RunValidation $env:MAESTER_RUN_POSTPROVISION_VALIDATION `
+  -RequireNoMail $env:MAESTER_REQUIRE_NO_MAIL `
+  -ValidationAction $validationAction
+
+if ($validationResult.ValidationSkipped) {
+  Write-Host "Skipping postprovision job validation: $($validationResult.SkipReason)"
+}
+else {
+  Write-Host 'Running postprovision job validation...'
+}
 
 $armToken = az account get-access-token --subscription $SubscriptionId --resource https://management.azure.com/ --query accessToken -o tsv
 $armHeaders = @{ Authorization = "Bearer $armToken" }
@@ -317,8 +358,8 @@ $summaryLines += "- App Service Plan: $(if ($planResource) { $planResource.name 
 $summaryLines += "- Web App: $(if ($webAppResource) { $webAppResource.name } else { 'not deployed' })"
 $summaryLines += ""
 $summaryLines += '## How Components Interoperate'
-$summaryLines += '- Container App Job executes Maester tests on the weekly schedule and on-demand validation runs.'
-$summaryLines += '- The runner script is mounted from Azure Files into the container at /mnt/scripts.'
+$summaryLines += '- Container App Job executes the postprovision validation and any explicitly configured scheduled runs.'
+$summaryLines += '- The managed identity loads the verified private runtime bundle from Blob storage; ACR mode uses its digest-pinned image.'
 $summaryLines += '- Container App Job managed identity calls Microsoft Graph using the configured permission profile.'
 $summaryLines += '- Container App Job managed identity uploads gzip-compressed dated reports to storage container `archive` and `latest.html` to `latest`.'
 if ($acrResource) {
@@ -333,7 +374,8 @@ else {
 }
 $summaryLines += ""
 $summaryLines += '## Validation Results'
-$summaryLines += "- Job validation status: $(if ($validationResult.ValidationPassed) { 'Passed' } else { 'Failed' })"
+$summaryLines += "- Job validation status: $(if ($validationResult.ValidationSkipped) { "Not run ($($validationResult.FinalStatus))" } elseif ($validationResult.ValidationPassed) { 'Passed' } else { 'Failed' })"
+if ($validationResult.ValidationSkipped) { $summaryLines += "- Validation reason: $($validationResult.SkipReason)" }
 $summaryLines += "- Job execution name: $($validationResult.ExecutionName)"
 $summaryLines += "- Job final status: $($validationResult.FinalStatus)"
 $summaryLines += "- Validation completed at: $($validationResult.CompletedAt)"

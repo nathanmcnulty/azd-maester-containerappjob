@@ -48,7 +48,7 @@ Describe 'Main Container App Job preflight' {
 
   It 'preflights the job before storage role and environment receipt writes' {
     $setup = Get-Content (Join-Path $PSScriptRoot '../scripts/Setup-PostDeploy.ps1') -Raw
-    $setup.IndexOf('Resolve-MaesterMainDeploymentTarget') | Should -BeLessThan $setup.IndexOf('Storage Blob Data Reader for signed-in user')
+    $setup.IndexOf('Resolve-MaesterMainDeploymentTarget') | Should -BeLessThan $setup.IndexOf('Get-MaesterSetupAccessPlan @accessPlanParameters')
     $setup.IndexOf('Resolve-MaesterMainDeploymentTarget') | Should -BeLessThan $setup.IndexOf("Set-MaesterAzdEnvValue -EnvironmentName `$EnvironmentName -Name 'CONTAINER_JOB_NAME'")
   }
 }

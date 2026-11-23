@@ -4,6 +4,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 Import-Module (Join-Path $PSScriptRoot 'Maester-Helpers.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'Maester-SetupHelpers.psm1') -Force
 
 function Get-ValueFromEnvironmentOrAzd {
   param(
@@ -38,6 +39,13 @@ function Invoke-MaesterPreUp {
     throw "AZURE_SUBSCRIPTION_ID is required to resolve resource group '$resourceGroupName'."
   }
 
+  $tenantId = Get-ValueFromEnvironmentOrAzd -Name 'AZURE_TENANT_ID' -AzdValues $envValues
+  if ([string]::IsNullOrWhiteSpace($tenantId)) {
+    throw "AZURE_TENANT_ID is required to resolve resource group '$resourceGroupName'."
+  }
+  $context = Get-AzCliSubscriptionContext -SubscriptionId $subscriptionId -TenantId $tenantId
+  $subscriptionId = $context.id
+
   $exists = (& az group exists --name $resourceGroupName --subscription $subscriptionId -o tsv 2>$null)
   if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($exists)) {
     throw "Failed to check whether resource group '$resourceGroupName' exists."
@@ -48,18 +56,16 @@ function Invoke-MaesterPreUp {
     return
   }
 
-  $location = Get-ValueFromEnvironmentOrAzd -Name 'AZURE_LOCATION' -AzdValues $envValues
-  if ([string]::IsNullOrWhiteSpace($location)) {
-    throw "AZURE_LOCATION is required to create resource group '$resourceGroupName'."
+  if ($exists.Trim().ToLowerInvariant() -ne 'false') {
+    throw "Invalid existence response for resource group '$resourceGroupName'."
   }
 
-  Write-Host "Creating resource group '$resourceGroupName' in '$location'..."
-  & az group create --name $resourceGroupName --location $location --subscription $subscriptionId --output none
-  if ($LASTEXITCODE -ne 0) {
-    throw "Failed to create resource group '$resourceGroupName'."
-  }
+  # Preup is read-only. Creating here would predate the durable fresh-RG
+  # receipt and make a normal azd up indistinguishable from a reused group.
+  # The preprovision hook creates only after the wizard and exact target checks,
+  # through Initialize-MaesterInfrastructureOwnership's pending/HTTP-201 path.
+  Write-Host "Resource group '$resourceGroupName' is absent. Creation is deferred to ownership-aware preprovision."
 
-  Write-Host "Created resource group '$resourceGroupName'."
 }
 
 Export-ModuleMember -Function Invoke-MaesterPreUp
