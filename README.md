@@ -2,9 +2,9 @@
 
 Deploys a production-style Maester automation solution on Azure with:
 
-- Azure Container App Job (PowerShell 7.4 Mariner container)
+- Azure Container App Job (PowerShell 7.6.6 / .NET 10 Linux x64, with optional ACR)
 - Managed identity + Graph permissions
-- Runner script mounted via Azure Files volume
+- Keyless private runtime bundle with managed identity (optional ACR packages the runner)
 - Storage-backed report history (`archive`) and latest pointer (`latest/latest.html`)
 - Optional Azure Container Registry with pre-built image for faster startup
 - Optional App Service + Easy Auth portal in WebApp mode
@@ -17,13 +17,22 @@ After `azd init -t nathanmcnulty/azd-maester-containerappjob`, run from the temp
 
 ## Versioning and shared components
 
-This template uses the stable Maester module `2.2.0`. Shared azd hooks,
+This template uses the stable Maester module `2.3.0`. Shared azd hooks,
 permission setup, and the optional report web app are vendored from
 `nathanmcnulty/azd-reference` and recorded in `azd-components.lock.json`.
 
 The original multi-variant catalog remains available at
 [`nathanmcnulty/azd-maester`](https://github.com/nathanmcnulty/azd-maester) while
 the migration is being completed.
+
+Ordinary assessments prepare a private copy of the bundled tests before
+discovery. An exact hash-bound correction keeps Conditional Access What-If user
+collections as arrays and handles empty Pester 6.2 contexts while retaining the
+existing tests and request arguments. The installed module/package stays
+unchanged; unknown upstream content stops the assessment. A
+`MAESTER_TEST_COMPATIBILITY_V1` record reports the original and effective hashes.
+Runtime-only validation and the separate approved-drift path do not run this
+ordinary-assessment preparation.
 
 During interactive `azd up`, the preprovision wizard prompts for:
 
@@ -32,7 +41,13 @@ During interactive `azd up`, the preprovision wizard prompts for:
 - Azure RBAC scopes (when Azure is enabled)
 - Optional mail recipient
 
-For non-interactive runs (`azd up --no-prompt`), if `AZURE_RESOURCE_GROUP` is set, `preup` creates it automatically when missing.
+For fresh environments, `preprovision` creates the selected absent dedicated resource group and records its exact creation outcome. Existing groups are never silently adopted for cleanup.
+
+The azd entry point is `infra/main.bicep` at subscription scope, with the resource definitions in `infra/resources.bicep`. This lets `preprovision` create and record the group before ARM deployment: azd checks for an existing group before that hook when its entry point is resource-group scoped. The hook captures the selected group's actual location and all tags, checking a fresh group's ownership marker against its receipt. The hook stores UTF-8 Base64 metadata so azd parameter substitution preserves JSON quotes and Unicode tags. The template decodes it and declares the group using that captured metadata so `azd down` can discover it, and includes its nested deployment in the cleanup inventory. Missing metadata fails deployment instead of inventing ownership. Do not provision, retag, or delete the selected group concurrently.
+
+The default azd launcher requires subscription deployment permissions in addition to the selected resource permissions. For automation limited to an existing resource group, `infra/resources.bicep` remains available for direct group-scoped deployment with its original parameters; that route does not exercise the default azd launcher. The default launcher refuses a group managed by another Azure resource. Existing groups are never silently adopted for automatic cleanup, and the ownership guard still blocks `azd down` without its original fresh-group receipt.
+
+Before creating a group or submitting a deployment, evaluate the selected template offline with [Bicep CLI snapshot](https://learn.microsoft.com/azure/azure-resource-manager/bicep/bicep-cli#snapshot). Prepare a scratch `.bicepparam` file for the selected environment and parameters, then run `bicep snapshot <file> --mode overwrite --subscription-id <subscription-id> --location <location>`. For `infra/main.bicep`, include the group name and planned Base64 group metadata as template parameters. For `infra/resources.bicep`, add `--resource-group <group-name>`. Check that `predictedResources` contains exactly one `Microsoft.App/jobs` resource whose name is 2–32 characters and matches `^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`. The job keeps its existing name when the original truncated prefix is already valid.
 
 ## Advanced options (optional)
 
@@ -45,7 +60,7 @@ You can optionally enable additional data collection/connectivity for Maester by
 - `IncludeExchange`
   - Ensures the `ExchangeOnlineManagement` module is available at runtime.
   - Grants the Container App Job managed identity the Exchange app permission required for app-only Exchange Online access.
-  - Creates/links an Exchange service principal for the managed identity and assigns the Exchange RBAC role `View-Only Configuration` (best-effort).
+  - Creates/links an Exchange service principal for the managed identity and assigns the Exchange RBAC role `View-Only Configuration` after reviewing the exact existing-state delta.
 - `IncludeTeams`
   - Ensures the `MicrosoftTeams` module is available at runtime.
   - Assigns the Entra directory role `Teams Reader` to the Container App Job managed identity.
@@ -57,11 +72,12 @@ You can optionally enable additional data collection/connectivity for Maester by
 
 - Azure RBAC, Entra directory roles, Exchange assignments, and Microsoft Graph app-role assignments are separate authorities.
 - Some environments already have the required Microsoft Graph permissions consented and assigned. If Graph consent has not been completed previously, the deployment may require a **Global Administrator or Privileged Role Administrator**. See the selected profile and permission sections for solution-specific details.
-- If a step fails due to missing privileges, the scripts will:
-  - Prompt you to **Stop** or **Skip** in interactive runs.
-  - Default to **Skip + continue** in non-interactive runs (CI).
+- Setup uses an administrator-bootstrapped tenant-owned public client and an explicitly selected operator account. It reuses a matching bound Graph session by default.
+- Permission changes require review of a versioned plan: interactive approval defaults to No, and noninteractive application requires the exact approved plan hash. Failed or incomplete inventories stop setup before access changes.
+- Full is the new wizard default; No selects Minimal. Existing Extended settings retain their legacy role set. Mail and report-setting writes remain separate opt-in capabilities.
+- See [setup and consent migration](docs/setup-consent-migration.md) and [Maester 2.3.0 upgrade notes](docs/maester-230-upgrade.md).
 - Toggling an option from `Yes` to `No` in a later `azd up` run is additive only and does **not** revoke prior assignments.
-- Revocation/best-effort cleanup runs on `azd down` (predown hook).
+- `azd down` checks ownership first and removes only exactly receipted external objects after Azure absence and a fresh cleanup approval.
 
 What this does:
 
@@ -74,7 +90,7 @@ What this does:
 - **WebApp**: Quick + Web App (Entra auth restricted by security group)
 
 For a manual postprovision retry after a successful provision, run
-`./scripts/Setup-PostDeploy.ps1 -EnvironmentName <selected-environment> -SubscriptionId <selected-subscription> -ResourceGroupName <deployed-resource-group>`.
+`./scripts/Setup-PostDeploy.ps1 -EnvironmentName <selected-environment> -SubscriptionId <selected-subscription> -TenantId <selected-tenant> -ResourceGroupName <deployed-resource-group>` to generate a read-only plan. Review it, then rerun with `-Apply -ApprovedPlanHash <reviewed-hash>` or use `-InteractiveConsent`.
 Setup reads that environment's exact `containerAppJobName`, `containerAppJobPrincipalId`, `STORAGE_ACCOUNT_NAME` and optional
 `WEB_APP_NAME` and `WEB_APP_ENABLED` deployment outputs; a false enablement output skips Easy Auth even
 when other Web Apps exist in the resource group. Missing or mismatched targets
@@ -83,73 +99,69 @@ summary uses these exact outputs rather than another resource in the group.
 
 Defaults:
 
-- `PERMISSION_PROFILE=Extended`
+- `PERMISSION_PROFILE=Full` (legacy `Extended` remains distinct)
 - `WEB_APP_SKU=F1`
 - resource group pattern: `rg-<environment>-<location>` (override with `AZURE_RESOURCE_GROUP`)
 
 ## Operations
 
-- Remove environment + Azure resources (includes predown cleanup):
-  `azd down -e <env> --force --purge`
-- Optionally remove local azd env:
+- Remove environment + Azure resources (with separate owned-lock and postdown cleanup approvals):
+  `azd down -e <env>`
+- Only after complete cleanup and preserving recovery evidence, optionally remove local azd env:
   `azd env remove <env> --force`
 
 ### Cleanup details
 
-`azd down` runs `scripts/Run-AzdPreDown.ps1`, which performs best-effort cleanup for tenant/scope-level assignments created by advanced options, including:
+`azd down` validates the fresh dedicated resource group's ownership and exact declared inventory. Foreign resources or locks block teardown. Exact owned locks require a separate default-No confirmation; canceling azd afterward leaves those approved locks removed but resources and authorization unchanged.
 
-- Teams directory role assignments (`Teams Reader`) created by this environment
-- Azure RBAC role assignments created by this environment (at selected scopes)
-- Exchange Online permissions/assignments created by this environment (best-effort)
+After Azure deletion, `scripts/Run-AzdPostDown.ps1` proves the bound group/runtime absent, previews the remaining exact external objects, and requires a new default-No confirmation or current plan hash before deletion. Unknown outcomes, foreign dependencies and unsupported restoration of shared changes block cleanup and retain the journal for retry. A generic `--force` does not approve either hook's plan.
 
-The generated setup summary in `outputs/<env>-setup-summary.md` includes tracked assignment IDs used for cleanup.
+Preserve both `.azure/<env>/maester-*-ownership.json` receipts until cleanup is verified. The separately administrator-created setup client and access group remain external prerequisites. Deleting owned accounts removes their stored contents; owned ADO definition deletion also removes associated builds/history/artifacts. See [ownership and recovery limits](docs/owned-setup-cleanup.md) before teardown. Live before/after acceptance is still required.
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│ Container App Environment                                        │
-│   ┌────────────────────────────┐   ┌─────────────────────────┐   │
-│   │ Container App Job          │   │ Azure Files Mount       │   │
-│   │ (weekly schedule)          │──▶│ /mnt/scripts            │   │
-│   │ pwsh -File ...ps1          │   │ Invoke-MaesterContainer │   │
-│   │ MI: System-Assigned        │   │ Job.ps1                 │   │
-│   └──────┬─────────────────────┘   └─────────────────────────┘   │
-│          │                                                       │
-└──────────┼───────────────────────────────────────────────────────┘
-           │
-    ┌──────┼──────────────────────────────────────────────┐
-    │      ▼                                              │
-    │  ┌──────────┐  ┌──────────┐  ┌──────────┐           │
-    │  │ Graph    │  │ Storage  │  │ Web App  │ optional  │
-    │  │ + EXO    │  │ archive/ │  │ Easy Auth│           │
-    │  │ + Teams  │  │ latest/  │  │ portal   │           │
-    │  └──────────┘  └──────────┘  └──────────┘           │
-    │                                                     │
-    │  ┌──────────┐                                       │
-    │  │ ACR      │ optional (pre-built image)            │
-    │  └──────────┘                                       │
-    └─────────────────────────────────────────────────────┘
-```
+- No-ACR: pinned official bootstrap image → system managed identity → private `runtime/bundles/<sha256>.zip` → hash/size verification → isolated exact PowerShell engine and locked modules.
+- Optional ACR: digest-pinned custom image already contains the runner and locked runtime.
+- The job uses its system identity for Graph and optional EXO/Teams, private `archive`/`latest` report blobs, and the optional Web App portal. Neither mode mounts Azure Files.
+
+See [keyless delivery and migration gates](docs/keyless-runtime-migration.md). Existing deployments need an explicitly approved live and canonical-receipt migration; omission from incremental Bicep is not deletion.
 
 ## Script map
 
-- azd hooks: `scripts/Run-AzdPreUp.ps1`, `scripts/Run-AzdPreProvision.ps1`, `scripts/Run-AzdPostProvision.ps1`, `scripts/Run-AzdPreDown.ps1`
+- azd hooks: `scripts/Run-AzdPreUp.ps1`, `scripts/Run-AzdPreProvision.ps1`, `scripts/Run-AzdPostProvision.ps1`, `scripts/Run-AzdPreDown.ps1`, `scripts/Run-AzdPostDown.ps1`
 - Internal setup/validation: `scripts/Setup-PostDeploy.ps1`, `scripts/Invoke-JobValidation.ps1`
-- Container runner script (uploaded to Azure Files): `scripts/Invoke-MaesterContainerJob.ps1`
+- Container runner script (verified runtime bundle or packaged ACR image): `scripts/Invoke-MaesterContainerJob.ps1`
 - ACR image build: `scripts/Build-MaesterImage.ps1`, `Dockerfile`
 
 ## Runtime behavior
 
-- Weekly schedule (Sunday midnight UTC). To run at a different time or frequency, edit the `cronExpression` in `infra/main.bicep` (e.g. `'30 6 * * 1'` for Monday 6:30 UTC), then re-run `azd provision`.
-- Default image: `mcr.microsoft.com/powershell:lts-mariner-2.0` (modules installed at startup)
-- With `-IncludeACR`: custom image with modules pre-installed (faster startup)
-- Runner script is always mounted from Azure Files (never baked into image) for easy updates
+Configuration drift is disabled by default in this host. The runner excludes the
+locked Maester drift suite and clears `MAESTER_FOLDER_DRIFT` for ordinary runs,
+restoring its prior process value afterward even on failure. A manual operator
+can opt in with `-EnableApprovedDrift` and the complete explicit input/tenant/run
+binding arguments; the path uses private staging, exact drift/JUnit accounting,
+and staged-input cleanup before the existing private blob publication routes.
+Owned local reports are removed when the enabled run ends. An
+inherited environment variable cannot select unapproved baseline/current files.
+The first opt-in refuses configured mail and Web App destinations because their
+report audience and delivery boundaries remain unqualified. Native scheduled
+enablement, source transport, access, retention, rollback and second-host gates
+remain open under MCAJ-010. See [the qualification evidence](docs/drift-isolation.md).
+
+- Trigger mode defaults to `Manual`, which omits the scheduled trigger. Set `JOB_TRIGGER_TYPE=Schedule` in the selected azd environment only when the weekly schedule is intended. `infra/main.parameters.json` passes the setting to Bicep `jobTriggerType`; an unset value defaults to `Manual`. Only exact `Manual` and `Schedule` values are allowed. Manual mode emits `manualTriggerConfig` and omits `scheduleTriggerConfig` entirely. The trigger setting does not change identity or permissions. In Manual mode the postprovision hook performs setup but does not start validation by default. To opt into one postprovision validation, set `MAESTER_RUN_POSTPROVISION_VALIDATION=true` in the environment of that `azd provision` command; the setting is not persisted to the azd environment. Set `MAESTER_REQUIRE_NO_MAIL=true` for that command to pass the validator's pre-start guard, which refuses to start when the deployed job has `MAIL_RECIPIENT` configured. In Schedule mode, the hook retains its previous behavior and performs postprovision validation; `MAESTER_REQUIRE_NO_MAIL=true` still blocks that immediate validation before start when mail is configured, while the scheduled trigger itself remains independently capable of sending mail. Existing executions are not canceled by changing the trigger. Before native validation, verify the deployed job's trigger is `Manual` and no schedule configuration remains. Existing environments that intend to retain weekly executions must set `JOB_TRIGGER_TYPE=Schedule` before their next provision, because the new Manual default will otherwise replace the schedule. See the [Microsoft.App/jobs API contract](https://learn.microsoft.com/azure/templates/microsoft.app/2024-03-01/jobs).
+- Weekly schedule (Sunday midnight UTC) is available only when `JOB_TRIGGER_TYPE=Schedule` is explicitly selected. To change its time or frequency, edit the `cronExpression` in `infra/resources.bicep` (e.g. `'30 6 * * 1'` for Monday 6:30 UTC), then re-run `azd provision`.
+- Without `IncludeACR`: the digest-pinned official Azure PowerShell Ubuntu 24.04 image is only a bootstrap interpreter. System managed identity downloads a private content-addressed ZIP with externally pinned SHA-256 and size. After verification and safe extraction, that interpreter exits and the runner starts the separately verified exact PowerShell 7.6.6 / .NET 10 engine with isolated locked modules and writable HOME/XDG directories. No customer registry or Files mount is required. Blob storage/download and extraction costs still apply.
+- With `IncludeACR`: the Dockerfile installs the same exact PowerShell archive and locked modules, and packages executable runner content under `/opt/maester`. The provisioning placeholder fails closed until postprovision builds and applies the custom image digest. No runtime Blob upload is needed.
+- Missing inputs, authorization, hash, extraction, runtime or module failures stop execution. Owned temporary directories are removed on completion/cancellation; neither mode falls back to keys or SAS. Initial empty bundle pins fail closed until publication completes.
+- Hosted Linux x64 CI is configured to build the ACR image and qualify both runtime modes, including exact imports and negative tests. The explicit `-ValidateRuntimeOnly` diagnostic stops after imports, before identity authentication; it does not assess or publish. Local host tests do not prove those container checks have passed.
+- Native container qualification and approved Azure validation remain required for managed identity, report access, rollback and cleanup. Issue [#26](https://github.com/nathanmcnulty/azd-maester-containerappjob/issues/26) and MCAJ-002 remain open for those gates.
+- Runtime provenance: [official PowerShell 7.6.6 release and checksums](https://github.com/PowerShell/PowerShell/releases/tag/v7.6.6). The exact engine archive hash remains shared with the ACR Dockerfile. The bootstrap image is a different pinned base, not a qualified substitute for that assessment engine. Development-only SDK images are not the default.
+- Job roles are container-scoped: Reader on `runtime`, Contributor separately on `archive` and `latest`. Explicit setup consent covers the verified publishing operator's Contributor grant on `runtime`; no account key is retrieved.
 - Outputs:
   - `archive/maester-report-<timestamp>.html.gz`
   - `latest/latest.html`
 - In WebApp mode, latest report is published to Web App `index.html`
-- Entra auth via app registration is configured automatically. Existing Microsoft Graph consent and app-role assignments are reused; if they are not already present, the first run may require a **Global Administrator or Privileged Role Administrator**.
+- Entra auth via app registration is configured after the setup access plan is explicitly approved. Existing Microsoft Graph consent and app-role assignments are reused; if they are not already present, the first run may require a **Global Administrator or Privileged Role Administrator**.
 - Signed-in deployment user is granted `Storage Blob Data Reader` on the solution storage account
 - Blob soft delete is enabled for 1 day, with blob versioning disabled
 - Archive uploads are gzip compressed and written directly to Cool tier
@@ -177,3 +189,27 @@ This solution is reasonably secure, but there are additional controls you may ch
 - Azure Container Apps Jobs: https://learn.microsoft.com/azure/container-apps/jobs
 - Azure Container Apps storage: https://learn.microsoft.com/azure/container-apps/storage-mounts
 - App Service custom domain: https://learn.microsoft.com/azure/app-service/app-service-web-tutorial-custom-domain
+
+### Explicit deployment target guards
+
+Direct setup, image-build and job-validation calls require `-TenantId` or
+`AZURE_TENANT_ID` alongside the selected subscription. Fresh ARM metadata must
+confirm the intended tenant and an Enabled subscription before mutations. See
+[the canonical guard adoption and validation boundaries](docs/target-guard-adoption.md).
+
+### Assessment validation evidence
+
+The job validator now requires a fresh execution-bound structured receipt, not
+only Azure `Succeeded` or an HTML file. Policy failures remain valid findings;
+Maester errors, Pester discovery/setup errors and missing core execution fail
+validation. The caller needs already-authorized private Blob data access, and
+native qualification must use `-RequireNoMail` with mail disabled. Normal
+mail-enabled postprovision remains supported; inline mail delivery is explicitly
+unverified and outside the helper's validation scope. See the [receipt contract and native
+validation boundaries](docs/assessment-evidence.md).
+
+### Isolated runtime-only Azure smoke
+
+See the [opt-in runtime-only smoke guide](docs/runtime-only-smoke.md) for fixture-only
+launchers, least-privilege checks and offline regression tests. This is not an
+assessment run or automatic deployment.

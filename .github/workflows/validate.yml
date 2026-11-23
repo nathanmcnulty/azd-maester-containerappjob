@@ -6,6 +6,12 @@ on:
     branches: [main]
   workflow_dispatch:
 
+env:
+  POWERSHELL_TELEMETRY_OPTOUT: 1
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  AZURE_CORE_COLLECT_TELEMETRY: 0
+  BICEP_CLI_TELEMETRY_OPTOUT: 1
+
 permissions:
   contents: read
 
@@ -23,9 +29,23 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install test dependencies
-        run: Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force
+        run: |
+          if ($PSVersionTable.PSVersion -lt [version]'7.6') { throw 'PowerShell 7.6 or newer is required.' }
+          Write-Host "Validation PowerShell: $($PSVersionTable.PSVersion)"
+          Install-Module Pester -RequiredVersion 6.2.0 -Scope CurrentUser -Force
+      - name: Install pinned Bicep compiler for compiled infrastructure tests
+        run: |
+          az bicep install --version v0.42.1
+          if ($LASTEXITCODE -ne 0) { throw 'Bicep installation failed.' }
+          "BICEP_CLI_PATH=$HOME/.azure/bin/bicep" >> $env:GITHUB_ENV
       - name: Run repository tests
-        run: Invoke-Pester -Path ./tests -CI
+        run: |
+          Import-Module Pester -RequiredVersion 6.2.0 -Force
+          Write-Host "Validation Pester: $((Get-Module Pester).Version)"
+          Invoke-Pester -Path ./tests -CI
+      - name: Exercise bootstrap failure boundaries
+        shell: bash
+        run: python3 -m unittest discover -s tests -p 'test_*.py'
       - name: Parse PowerShell
         run: |
           $errors = @()
@@ -36,3 +56,41 @@ jobs:
             $errors += @($fileErrors)
           }
           if ($errors.Count) { throw ($errors | Out-String) }
+  container-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build the production image
+        run: docker build --platform linux/amd64 --tag maester-runtime:validation .
+      - name: Verify the image runtime and locked modules
+        run: >-
+          docker run --rm --network none --env POWERSHELL_TELEMETRY_OPTOUT=1 --env DOTNET_CLI_TELEMETRY_OPTOUT=1
+          --mount type=bind,source="${{ github.workspace }}/scripts/Test-ContainerRuntime.ps1",target=/tmp/Test-ContainerRuntime.ps1,readonly
+          maester-runtime:validation pwsh -NoLogo -NoProfile -File /tmp/Test-ContainerRuntime.ps1
+
+      - name: Qualify actual Maester 2.3.0 results and strict gates offline
+        run: >-
+          docker run --rm --network none --env POWERSHELL_TELEMETRY_OPTOUT=1 --env DOTNET_CLI_TELEMETRY_OPTOUT=1
+          --mount type=bind,source="${{ github.workspace }}",target=/repo,readonly
+          maester-runtime:validation pwsh -NoLogo -NoProfile -File /repo/tests/Invoke-Maester230Compatibility.ps1
+
+      - name: Qualify the unchanged approved drift suite against Maester 2.3.0
+        run: >-
+          docker run --rm --network none --env POWERSHELL_TELEMETRY_OPTOUT=1 --env DOTNET_CLI_TELEMETRY_OPTOUT=1
+          --mount type=bind,source="${{ github.workspace }}",target=/repo,readonly
+          maester-runtime:validation pwsh -NoLogo -NoProfile -File /repo/tests/Invoke-Maester230DriftCompatibility.ps1
+
+      - name: Verify the packaged ACR production invocation offline
+        run: >-
+          docker run --rm --network none --env POWERSHELL_TELEMETRY_OPTOUT=1 --env DOTNET_CLI_TELEMETRY_OPTOUT=1
+          maester-runtime:validation /bin/sh /opt/maester/Start-MaesterContainerJob.sh acr -ValidateRuntimeOnly
+
+  nonacr-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Run the production non-ACR bootstrap and locked imports
+        shell: pwsh
+        run: ./scripts/Test-NonAcrContainerRuntime.ps1

@@ -4,7 +4,7 @@ Describe 'Container runtime package integrity' {
     $installer = Join-Path $repoRoot 'scripts/Install-LockedModules.ps1'
     $lock = Get-Content -LiteralPath (Join-Path $repoRoot 'runtime-packages.lock.json') -Raw | ConvertFrom-Json
     $dockerfile = Get-Content -LiteralPath (Join-Path $repoRoot 'Dockerfile') -Raw
-    $infra = Get-Content -LiteralPath (Join-Path $repoRoot 'infra/main.bicep') -Raw
+    $infra = Get-Content -LiteralPath (Join-Path $repoRoot 'infra/resources.bicep') -Raw
   }
 
   It 'locks every module to an exact version and SHA-256 package digest' {
@@ -14,8 +14,8 @@ Describe 'Container runtime package integrity' {
       $package.version | Should -Match '^\d+(\.\d+){1,3}$'
       $package.sha256 | Should -Match '^[A-F0-9]{64}$'
     }
-    $dockerfile | Should -Match 'FROM mcr\.microsoft\.com/powershell:[^\s]+@sha256:[a-f0-9]{64}'
-    $infra | Should -Match 'mcr\.microsoft\.com/powershell:[^\s\x27]+@sha256:[a-f0-9]{64}'
+    $dockerfile | Should -Match 'FROM mcr\.microsoft\.com/dotnet/runtime-deps:[^\s]+@sha256:[a-f0-9]{64}'
+    $infra | Should -Match 'mcr\.microsoft\.com/azure-powershell@sha256:[a-f0-9]{64}'
   }
 
   It 'rejects changed package bytes before extracting any module files' {

@@ -150,23 +150,51 @@ function Get-AzCliSubscriptionContext {
     [string]$TenantId
   )
 
-  $accountsJson = (& az account list -o json 2>$null)
-  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($accountsJson)) {
-    throw 'Not authenticated. Run: azd auth login'
+  # Only ARM can attest the current subscription state; CLI account list/show
+  # is a local login cache and can remain Enabled after a subscription is disabled.
+  $subscriptionGuid = [guid]::Empty
+  $tenantGuid = [guid]::Empty
+  if (-not [guid]::TryParse($SubscriptionId, [ref]$subscriptionGuid) -or $subscriptionGuid -eq [guid]::Empty) {
+    throw 'An explicit non-empty subscription GUID is required.'
+  }
+  if (-not [string]::IsNullOrWhiteSpace($TenantId) -and
+      (-not [guid]::TryParse($TenantId, [ref]$tenantGuid) -or $tenantGuid -eq [guid]::Empty)) {
+    throw 'The expected tenant must be a non-empty GUID.'
+  }
+  $SubscriptionId = $subscriptionGuid.ToString()
+  $metadataJson = (& az rest --method get --url "https://management.azure.com/subscriptions/${SubscriptionId}?api-version=2022-12-01" --subscription $SubscriptionId --output json 2>$null)
+  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($metadataJson)) {
+    throw "Unable to read current ARM metadata for subscription '$SubscriptionId'. Sign in with az login --tenant <tenant-id> using normal broker/browser authentication."
+  }
+  try {
+    $metadata = $metadataJson | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+  }
+  catch {
+    throw "Invalid ARM metadata for subscription '$SubscriptionId'."
+  }
+  $actualTenant = [guid]::Empty
+  if ($metadata -isnot [System.Collections.IDictionary] -or
+      [string]$metadata.subscriptionId -ine $SubscriptionId -or
+      [string]$metadata.id -ine "/subscriptions/$SubscriptionId" -or
+      -not [guid]::TryParse([string]$metadata.tenantId, [ref]$actualTenant) -or
+      $actualTenant -eq [guid]::Empty -or
+      [string]::IsNullOrWhiteSpace([string]$metadata.displayName)) {
+    throw "Missing or invalid ARM subscription identity/tenant metadata for '$SubscriptionId'."
+  }
+  if ($tenantGuid -ne [guid]::Empty -and $actualTenant -ne $tenantGuid) {
+    throw "Subscription '$SubscriptionId' belongs to tenant '$actualTenant', not selected tenant '$TenantId'."
+  }
+  if ([string]$metadata.state -cne 'Enabled') {
+    throw "Subscription '$SubscriptionId' must currently be Enabled; ARM returned '$($metadata.state)'."
   }
 
-  $account = @($accountsJson | ConvertFrom-Json) |
-    Where-Object { $_.id -ieq $SubscriptionId } |
-    Select-Object -First 1
-  if (-not $account) {
-    throw "Subscription '$SubscriptionId' is not available in the current Azure CLI login."
+  # Preserve the account-shaped fields consumed by hooks (ARM id is a resource path).
+  return [pscustomobject]@{
+    id = $SubscriptionId
+    name = [string]$metadata.displayName
+    tenantId = $actualTenant.ToString()
+    state = [string]$metadata.state
   }
-
-  if (-not [string]::IsNullOrWhiteSpace($TenantId) -and $account.tenantId -ine $TenantId) {
-    throw "Subscription '$SubscriptionId' belongs to tenant '$($account.tenantId)', not selected tenant '$TenantId'."
-  }
-
-  return $account
 }
 
 function Get-AzCliAccessToken {
@@ -178,6 +206,20 @@ function Get-AzCliAccessToken {
     [Parameter(Mandatory = $false)]
     [string]$SubscriptionId
   )
+
+  if ([string]::IsNullOrWhiteSpace($TenantId) -and [string]::IsNullOrWhiteSpace($SubscriptionId)) {
+    throw 'An explicit TenantId or SubscriptionId is required for Azure CLI token acquisition.'
+  }
+  $expectedTenant = [guid]::Empty
+  if (-not [string]::IsNullOrWhiteSpace($TenantId) -and
+      (-not [guid]::TryParse($TenantId, [ref]$expectedTenant) -or $expectedTenant -eq [guid]::Empty)) {
+    throw 'An explicit non-empty tenant GUID is required for Azure CLI token acquisition.'
+  }
+  if (-not [string]::IsNullOrWhiteSpace($SubscriptionId)) {
+    $context = Get-AzCliSubscriptionContext -SubscriptionId $SubscriptionId -TenantId $TenantId
+    $SubscriptionId = $context.id
+    $expectedTenant = [guid]$context.tenantId
+  }
 
   try {
     $tokenArgs = @('account', 'get-access-token', '--resource', $Resource, '-o', 'json')
@@ -194,7 +236,9 @@ function Get-AzCliAccessToken {
     $tokenJson = (& az @tokenArgs 2>$null)
     if ($LASTEXITCODE -eq 0 -and $tokenJson) {
       $tokenData = $tokenJson | ConvertFrom-Json
-      if ($tokenData.accessToken) {
+      if (-not [string]::IsNullOrWhiteSpace([string]$tokenData.accessToken) -and
+          [string]$tokenData.tenant -ieq $expectedTenant.ToString() -and
+          ([string]::IsNullOrWhiteSpace($SubscriptionId) -or [string]$tokenData.subscription -ieq $SubscriptionId)) {
         return $tokenData.accessToken
       }
     }
@@ -206,160 +250,172 @@ function Get-AzCliAccessToken {
   return $null
 }
 
-function Get-GraphAccessToken {
+# The setup identity is never used by a hosted runner. Its complete delegated
+# scope union is chosen before connection; no helper silently requests more access.
+$script:MaesterGraphSession = $null
+
+function Get-MaesterSetupScopes {
+  [CmdletBinding()]
+  param([switch]$IncludeTeams, [switch]$IncludeWebApp)
+
+  $scopes = @('Application.Read.All', 'AppRoleAssignment.ReadWrite.All', 'Directory.Read.All')
+  if ($IncludeTeams) { $scopes += 'RoleManagement.ReadWrite.Directory' }
+  if ($IncludeWebApp) {
+    $scopes += @('Application.ReadWrite.All', 'DelegatedPermissionGrant.ReadWrite.All', 'Group.Read.All')
+  }
+  return @($scopes | Sort-Object -Unique)
+}
+
+function Import-MaesterGraphCoordinator {
+  $vendorPath = Join-Path $PSScriptRoot '../Azd.GraphAuthentication/Azd.GraphAuthentication.psd1'
+  $sourcePath = Join-Path $PSScriptRoot '../graph-delegated-authentication/Azd.GraphAuthentication.psd1'
+  $modulePath = if (Test-Path -LiteralPath $vendorPath) { $vendorPath } else { $sourcePath }
+  if (-not (Test-Path -LiteralPath $modulePath)) {
+    throw 'Synchronize graph-delegated-authentication 1.1.0 alongside maester-azd-hooks before setup.'
+  }
+  Import-Module $modulePath -ErrorAction Stop
+}
+
+function Assert-GraphAccess {
+  [CmdletBinding()]
   param(
-    [Parameter(Mandatory = $false)]
-    [string]$TenantId,
-    [Parameter(Mandatory = $false)]
-    [string[]]$Scopes = @(),
-    [Parameter(Mandatory = $false)]
-    [bool]$AllowInteractiveLogin = $true
+    [Parameter(Mandatory)][string]$TenantId,
+    [string[]]$Scopes = @('Application.Read.All', 'AppRoleAssignment.ReadWrite.All', 'Directory.Read.All'),
+    [string]$ClientId = $env:MAESTER_SETUP_CLIENT_ID,
+    [string]$ExpectedAccount = $env:MAESTER_SETUP_ACCOUNT,
+    [switch]$AllowInteractive,
+    [switch]$AllowContextReplacement
   )
 
-  $token = Get-AzCliAccessToken -Resource 'https://graph.microsoft.com' -TenantId $TenantId
-  if ($token) {
-    return $token
+  $script:MaesterGraphSession = $null
+  $tenantGuid = [guid]::Empty
+  $clientGuid = [guid]::Empty
+  if (-not [guid]::TryParse($TenantId, [ref]$tenantGuid) -or $tenantGuid -eq [guid]::Empty -or
+      -not [guid]::TryParse($ClientId, [ref]$clientGuid) -or $clientGuid -eq [guid]::Empty -or
+      $clientGuid -eq [guid]'14d82eec-204b-4c2f-b7e8-296a70dab67e' -or
+      $ExpectedAccount -notmatch '^[^@\s]+@[^@\s]+$') {
+    throw 'Provide the selected tenant, tenant-owned MAESTER_SETUP_CLIENT_ID and explicit MAESTER_SETUP_ACCOUNT UPN. Complete authorized administrator bootstrap first; the setup client cannot create or consent itself.'
   }
-
-  if ($AllowInteractiveLogin) {
-    Confirm-AzureLogin -TenantId $TenantId
-    $token = Get-AzCliAccessToken -Resource 'https://graph.microsoft.com' -TenantId $TenantId
-    if ($token) {
-      return $token
-    }
+  Import-MaesterGraphCoordinator
+  $requiredScopes = @(Resolve-AzdGraphScopeSet -Scope $Scopes)
+  $connection = @{
+    TenantId = $tenantGuid
+    ExpectedClientId = $clientGuid
+    ExpectedAccount = $ExpectedAccount
+    Environment = 'Global'
+    ContextScope = 'Process'
+    Scopes = $requiredScopes
+    ProbeUri = '/v1.0/organization?$select=id&$top=1'
+    AllowInteractive = $AllowInteractive
+    AllowContextReplacement = $AllowContextReplacement
   }
+  $null = Connect-AzdGraphSession @connection
 
-  $scopeText = if ($Scopes -and $Scopes.Count -gt 0) { $Scopes -join ', ' } else { 'default Graph scopes' }
-  throw "Microsoft Graph token acquisition failed (requested: $scopeText). Ensure Azure login is active and has Graph permissions."
+  # A custom client id alone is insufficient: reject an app owned by another
+  # tenant or an application that is not configured as a single-tenant public client.
+  $servicePrincipals = Invoke-MgGraphRequest -Method GET -Uri "/v1.0/servicePrincipals?`$filter=appId eq '$clientGuid'&`$select=id,appId,appOwnerOrganizationId" -OutputType PSObject -ErrorAction Stop
+  $applications = Invoke-MgGraphRequest -Method GET -Uri "/v1.0/applications?`$filter=appId eq '$clientGuid'&`$select=id,appId,signInAudience,isFallbackPublicClient,publicClient" -OutputType PSObject -ErrorAction Stop
+  if (@($servicePrincipals.value).Count -ne 1 -or @($applications.value).Count -ne 1 -or
+      ($servicePrincipals.PSObject.Properties['@odata.nextLink'] -and $servicePrincipals.'@odata.nextLink') -or
+      ($applications.PSObject.Properties['@odata.nextLink'] -and $applications.'@odata.nextLink') -or
+      [string]$servicePrincipals.value[0].appId -ine $clientGuid.ToString() -or
+      [string]$servicePrincipals.value[0].appOwnerOrganizationId -ine $tenantGuid.ToString() -or
+      [string]$applications.value[0].appId -ine $clientGuid.ToString() -or
+      [string]$applications.value[0].signInAudience -cne 'AzureADMyOrg' -or
+      'http://localhost' -notin @($applications.value[0].publicClient.redirectUris)) {
+    throw 'The selected setup client must be a tenant-owned, single-tenant public client with the localhost redirect URI. Ask an authorized administrator to complete bootstrap.'
+  }
+  $script:MaesterGraphSession = @{
+    TenantId = $tenantGuid
+    ExpectedClientId = $clientGuid
+    ExpectedAccount = $ExpectedAccount
+    Environment = 'Global'
+    ContextScope = 'Process'
+    Scopes = $requiredScopes
+    ProbeUri = '/v1.0/organization?$select=id&$top=1'
+  }
+}
+
+function Test-MaesterGraphSession {
+  [CmdletBinding()]
+  param([Parameter(Mandatory)][string]$TenantId)
+  return $null -ne $script:MaesterGraphSession -and $TenantId -ieq $script:MaesterGraphSession.TenantId.ToString()
+}
+
+function Get-MaesterGraphSetupClientId {
+  [CmdletBinding()]
+  param([Parameter(Mandatory)][string]$TenantId)
+  if (-not (Test-MaesterGraphSession -TenantId $TenantId)) {
+    throw 'The selected tenant must have a verified setup session before identifying its setup client.'
+  }
+  return $script:MaesterGraphSession.ExpectedClientId.ToString()
 }
 
 function Invoke-GraphRestRequest {
   [CmdletBinding()]
   param(
-    [Parameter(Mandatory = $true)]
-    [ValidateSet('GET', 'POST', 'PUT', 'PATCH', 'DELETE')]
-    [string]$Method,
-    [Parameter(Mandatory = $true)]
-    [string]$Uri,
-    [Parameter(Mandatory = $false)]
+    [Parameter(Mandatory)][ValidateSet('GET', 'POST', 'PUT', 'PATCH', 'DELETE')][string]$Method,
+    [Parameter(Mandatory)][string]$Uri,
     $Body,
-    [Parameter(Mandatory = $false)]
     [string]$ContentType = 'application/json',
-    [Parameter(Mandatory = $false)]
     [string]$TenantId
   )
 
-  $token = Get-GraphAccessToken -TenantId $TenantId
-  $headers = @{
-    Authorization = "Bearer $token"
+  if ($null -eq $script:MaesterGraphSession) {
+    throw 'Call Assert-GraphAccess once with the complete selected setup-scope union before Graph requests.'
   }
-
-  $invokeParams = @{
-    Method  = $Method
-    Uri     = $Uri
-    Headers = $headers
+  if ($TenantId -and $TenantId -ine $script:MaesterGraphSession.TenantId.ToString()) {
+    throw 'The request tenant differs from the verified setup session.'
   }
-
+  $parsed = $null
+  if (-not [uri]::TryCreate($Uri, [UriKind]::Absolute, [ref]$parsed) -or
+      $parsed.Scheme -cne 'https' -or $parsed.Host -ine 'graph.microsoft.com' -or
+      $parsed.Port -ne 443 -or $parsed.UserInfo -or $parsed.Fragment -or
+      $parsed.AbsolutePath -notmatch '^/(v1\.0|beta)/') {
+    throw 'Graph requests must target an absolute HTTPS Microsoft Graph URI.'
+  }
+  # No reconnect or context replacement at a write boundary. A changed client,
+  # account, tenant, cloud, context scope or scope set fails closed before the request.
+  $null = Connect-AzdGraphSession @script:MaesterGraphSession
+  $invokeParams = @{ Method = $Method; Uri = $Uri; OutputType = 'PSObject'; ErrorAction = 'Stop' }
   if ($PSBoundParameters.ContainsKey('Body') -and $null -ne $Body) {
-    $payload = if ($Body -is [string]) { $Body } else { $Body | ConvertTo-Json -Depth 20 }
-    $invokeParams['Body'] = $payload
-    $invokeParams['ContentType'] = $ContentType
+    $invokeParams.Body = if ($Body -is [string]) { $Body } else { $Body | ConvertTo-Json -Depth 20 }
+    $invokeParams.ContentType = $ContentType
   }
-
-  $responseStatus = 0
-  $response = Invoke-RestMethod @invokeParams -SkipHttpErrorCheck -StatusCodeVariable responseStatus
-
-  if ($responseStatus -ge 400) {
-    $errorMessage = $null
-    if ($response -and $response.error -and $response.error.message) {
-      $errorMessage = [string]$response.error.message
-    }
-    elseif ($response -is [string] -and -not [string]::IsNullOrWhiteSpace($response)) {
-      $errorMessage = $response
-    }
-
-    if ([string]::IsNullOrWhiteSpace($errorMessage)) {
-      $errorMessage = 'No response content.'
-    }
-
-    throw "Microsoft Graph request failed. HTTP ${responseStatus}: $errorMessage"
-  }
-
-  return $response
-}
-
-function Assert-GraphAccess {
-  param(
-    [Parameter(Mandatory = $true)]
-    [string]$TenantId,
-    [Parameter(Mandatory = $false)]
-    [string[]]$Scopes = @()
-  )
-
-  if (-not [string]::IsNullOrWhiteSpace($TenantId)) {
-    $script:MaesterGraphTenantId = $TenantId
-  }
-
-  try {
-    Invoke-GraphRestRequest -Method GET -Uri 'https://graph.microsoft.com/v1.0/organization?$select=id&$top=1' -TenantId $script:MaesterGraphTenantId | Out-Null
-  }
-  catch {
-    $scopeText = if ($Scopes -and $Scopes.Count -gt 0) { $Scopes -join ', ' } else { 'default Graph scopes' }
-    throw "Microsoft Graph access check failed for tenant '$TenantId' (requested: $scopeText). Ensure Azure login is active and has Graph permissions. Error: $($_.Exception.Message)"
-  }
-}
-
-function global:Invoke-MgGraphRequest {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory = $true)]
-    [ValidateSet('GET', 'POST', 'PUT', 'PATCH', 'DELETE')]
-    [string]$Method,
-    [Parameter(Mandatory = $true)]
-    [string]$Uri,
-    [Parameter(Mandatory = $false)]
-    $Body,
-    [Parameter(Mandatory = $false)]
-    [string]$ContentType = 'application/json'
-  )
-
-  return Invoke-GraphRestRequest -Method $Method -Uri $Uri -Body $Body -ContentType $ContentType -TenantId $script:MaesterGraphTenantId
+  return Invoke-MgGraphRequest @invokeParams
 }
 
 function Connect-MgGraphSilent {
+  [CmdletBinding()]
   param(
-    [Parameter(Mandatory = $true)]
-    [string]$TenantId,
-    [Parameter(Mandatory = $false)]
-    [string[]]$Scopes = @()
+    [Parameter(Mandatory)][string]$TenantId,
+    [string[]]$Scopes = @('Application.Read.All', 'AppRoleAssignment.ReadWrite.All', 'Directory.Read.All'),
+    [string]$ClientId = $env:MAESTER_SETUP_CLIENT_ID,
+    [string]$ExpectedAccount = $env:MAESTER_SETUP_ACCOUNT
   )
-
-  Assert-GraphAccess -TenantId $TenantId -Scopes $Scopes
+  Assert-GraphAccess -TenantId $TenantId -Scopes $Scopes -ClientId $ClientId -ExpectedAccount $ExpectedAccount
 }
 
 function Connect-ExchangeOnlineSilent {
   param(
     [Parameter(Mandatory = $false)]
-    [string]$Organization
+    [string]$Organization,
+    [Parameter(Mandatory = $false)]
+    [string]$TenantId
   )
 
-  $token = Get-AzCliAccessToken -Resource 'https://outlook.office365.com'
-  if ($token) {
-    $connectArgs = @{
-      AccessToken = $token
-      ShowBanner  = $false
-    }
-    if (-not [string]::IsNullOrWhiteSpace($Organization)) {
-      $connectArgs['Organization'] = $Organization
-    }
-    Connect-ExchangeOnline @connectArgs | Out-Null
-    return
+  # Do not infer the target from Organization or the ambient CLI/Exchange session.
+  # Keeping this non-mandatory avoids an interactive parameter prompt on old callers.
+  if ([string]::IsNullOrWhiteSpace($TenantId)) {
+    throw 'TenantId is required for Exchange Online. Pass the validated selected tenant explicitly.'
   }
-
-  Write-Verbose 'az cli token not available for Exchange Online. Falling back to interactive auth.'
+  $token = Get-AzCliAccessToken -Resource 'https://outlook.office365.com' -TenantId $TenantId
+  if (-not $token) {
+    throw "Exchange Online token acquisition failed for tenant '$TenantId'. Run az login --tenant $TenantId using normal broker/browser authentication, then retry."
+  }
   $connectArgs = @{
+    AccessToken = $token
     ShowBanner = $false
-    DisableWAM = $true
   }
   if (-not [string]::IsNullOrWhiteSpace($Organization)) {
     $connectArgs['Organization'] = $Organization
@@ -369,6 +425,11 @@ function Connect-ExchangeOnlineSilent {
 
 function Confirm-AzureLogin {
   param([Parameter(Mandatory = $false)][string]$TenantId)
+
+  $tenantGuid = [guid]::Empty
+  if (-not [guid]::TryParse($TenantId, [ref]$tenantGuid) -or $tenantGuid -eq [guid]::Empty) {
+    throw 'An explicit non-empty tenant GUID is required for Azure login.'
+  }
 
   try {
     $tokenArgs = @('account', 'get-access-token', '--resource', 'https://graph.microsoft.com', '--output', 'none')
@@ -488,13 +549,13 @@ function Grant-ServicePrincipalAppRoleAssignment {
     [Guid]$AppRoleId
   )
 
-  $spResponse = Invoke-MgGraphRequest -Method GET -Uri ("https://graph.microsoft.com/v1.0/servicePrincipals?`$filter=appId eq '{0}'&`$select=id" -f $ResourceAppId)
+  $spResponse = Invoke-GraphRestRequest -Method GET -Uri ("https://graph.microsoft.com/v1.0/servicePrincipals?`$filter=appId eq '{0}'&`$select=id" -f $ResourceAppId)
   if (-not $spResponse.value -or $spResponse.value.Count -eq 0) {
     throw "Service principal for resource appId '$ResourceAppId' was not found in this tenant."
   }
 
   $resourceSpId = $spResponse.value[0].id
-  $existing = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/v1.0/servicePrincipals/$PrincipalObjectId/appRoleAssignments"
+  $existing = Invoke-GraphRestRequest -Method GET -Uri "https://graph.microsoft.com/v1.0/servicePrincipals/$PrincipalObjectId/appRoleAssignments"
   $match = @($existing.value | Where-Object { $_.resourceId -eq $resourceSpId -and $_.appRoleId -eq $AppRoleId }) | Select-Object -First 1
   if ($match) {
     return $null
@@ -506,7 +567,7 @@ function Grant-ServicePrincipalAppRoleAssignment {
     appRoleId   = $AppRoleId
   } | ConvertTo-Json
 
-  $created = Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/servicePrincipals/$PrincipalObjectId/appRoleAssignments" -Body $body -ContentType 'application/json'
+  $created = Invoke-GraphRestRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/servicePrincipals/$PrincipalObjectId/appRoleAssignments" -Body $body -ContentType 'application/json'
   if ($created -and $created.id) {
     return $created.id
   }
@@ -521,7 +582,7 @@ function Get-DirectoryRoleDefinitionId {
   )
 
   $escaped = $RoleDisplayName.Replace("'", "''")
-  $defs = Invoke-MgGraphRequest -Method GET -Uri ("https://graph.microsoft.com/v1.0/roleManagement/directory/roleDefinitions?`$filter=displayName eq '{0}'&`$select=id,displayName" -f $escaped)
+  $defs = Invoke-GraphRestRequest -Method GET -Uri ("https://graph.microsoft.com/v1.0/roleManagement/directory/roleDefinitions?`$filter=displayName eq '{0}'&`$select=id,displayName" -f $escaped)
   if (-not $defs.value -or $defs.value.Count -eq 0) {
     throw "Directory role definition '$RoleDisplayName' was not found."
   }
@@ -537,7 +598,7 @@ function Get-DirectoryRoleAssignmentId {
     [string]$RoleDefinitionId
   )
 
-  $existing = Invoke-MgGraphRequest -Method GET -Uri (
+  $existing = Invoke-GraphRestRequest -Method GET -Uri (
     "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments?`$filter=principalId eq '{0}' and roleDefinitionId eq '{1}' and directoryScopeId eq '/'&`$select=id" -f $PrincipalObjectId, $RoleDefinitionId
   )
 
@@ -569,7 +630,7 @@ function Test-DirectoryRoleAssignment {
     directoryScopeId = '/'
   } | ConvertTo-Json
 
-  $created = Invoke-MgGraphRequest -Method POST -Uri 'https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments' -Body $body -ContentType 'application/json'
+  $created = Invoke-GraphRestRequest -Method POST -Uri 'https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments' -Body $body -ContentType 'application/json'
   if ($created -and $created.id) {
     return $created.id
   }

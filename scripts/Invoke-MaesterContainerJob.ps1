@@ -1,11 +1,96 @@
-﻿# Invoke-MaesterContainerJob.ps1
-# Runner script for the Container App Job. Mounted via Azure Files volume.
+#Requires -Version 7.6
+# Invoke-MaesterContainerJob.ps1
+# Runner script for the Container App Job. Non-ACR execution uses the verified private runtime bundle;
+# ACR execution uses the runner packaged under /opt/maester in the image.
 # Reads configuration from environment variables set on the Container App Job.
+
+[CmdletBinding()]
+param(
+  [switch]$ValidateRuntimeOnly,
+  [switch]$EnableApprovedDrift,
+  [string]$DriftInputRoot,
+  [string]$DriftExpectedBaselineManifestSha256,
+  [string]$DriftExpectedTenantId,
+  [string]$DriftEnvironment,
+  [string]$DriftRunId,
+  [string]$DriftProducerId,
+  [string]$DriftProducerRevision,
+  [ValidateRange(1, 60)][int]$DriftMaxAgeMinutes = 30
+)
+
+# Defense in depth for direct invocation, before modules or Azure authentication.
+if (-not $IsLinux -or [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture -ne 'X64' -or [Environment]::Version.Major -ne 10) {
+  throw 'The Maester runner requires PowerShell 7.6+ / .NET 10 on Linux x64.'
+}
 
 # Use 'Continue' globally so that test framework errors (Pester/Maester) do not
 # abort the script. Critical sections use explicit -ErrorAction Stop instead.
 $ErrorActionPreference = 'Continue'
 $ConfirmPreference = 'None'
+
+function Initialize-MaesterAssessmentTests {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$SourcePath,
+    [Parameter(Mandatory)][string]$DestinationPath
+  )
+  $ErrorActionPreference = 'Stop'
+  Set-StrictMode -Version Latest
+  # Function packages may be mounted read-only and shared by warm invocations.
+  # Repair a private copy; never modify the verified module or its package.
+  $source = Get-Item -LiteralPath $SourcePath -Force -ErrorAction Stop
+  if (-not $source.PSIsContainer -or ($source.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'assessment.whatIfSourceInvalid' }
+  if (@(Get-ChildItem -LiteralPath $SourcePath -Recurse -Force | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count) { throw 'assessment.whatIfSourceInvalid' }
+  $destination = [IO.Path]::GetFullPath($DestinationPath)
+  $sourceFull = [IO.Path]::GetFullPath($SourcePath).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+  if ($destination.StartsWith($sourceFull, [StringComparison]::OrdinalIgnoreCase) -or (Test-Path -LiteralPath $destination)) { throw 'assessment.whatIfDestinationInvalid' }
+  $parent = Get-Item -LiteralPath (Split-Path $destination -Parent) -Force -ErrorAction Stop
+  if (-not $parent.PSIsContainer -or ($parent.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'assessment.whatIfDestinationInvalid' }
+  Copy-Item -LiteralPath $SourcePath -Destination $destination -Recurse -ErrorAction Stop
+  $copiedTarget = Get-Item -LiteralPath (Join-Path $destination 'Maester/Entra/Test-ConditionalAccessWhatIf.Tests.ps1') -ErrorAction Stop
+  if ($copiedTarget.IsReadOnly) { $copiedTarget.IsReadOnly = $false }
+  $receipt = Repair-MaesterWhatIfDiscovery -TestsPath $destination
+  [pscustomobject]@{ TestsPath = $destination; Compatibility = $receipt }
+}
+
+function Repair-MaesterWhatIfDiscovery {
+  param([Parameter(Mandatory)][string]$TestsPath)
+  $ErrorActionPreference = 'Stop'
+  Set-StrictMode -Version Latest
+  # Maester 2.3.0 emits a scalar for a single user. Its bundled CA What-If
+  # discovery calls IndexOf on those results. Keep every test and API call;
+  # Normalize the five collection assignments in this exact locked file. Pester
+  # 6.2 must also explicitly allow empty data on these two contexts; other
+  # discovery failures and all real user cases remain enabled.
+  $path = Join-Path $TestsPath 'Maester/Entra/Test-ConditionalAccessWhatIf.Tests.ps1'
+  $file = Get-Item -LiteralPath $path -ErrorAction Stop
+  if ($file -isnot [IO.FileInfo] -or $file.LinkType) { throw 'assessment.whatIfSourceInvalid' }
+  $source = [IO.File]::ReadAllText($path).TrimStart([char]0xFEFF).Replace("`r`n", "`n")
+  $originalHash = '4EAFA3104AA711BB186E0633AC1EF8BA9074F9160AF8573D35570559B03BA384'
+  $patchedHash = '957AC886DF9FFFBEB75BA5F27CE0735057142F8BEDEA383D80FFE4858D138939'
+  $hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($source)))
+  if ($hash -cne $originalHash -and $hash -cne $patchedHash) { throw 'assessment.whatIfSourceUnrecognized' }
+  $changed = $hash -ceq $originalHash
+  if ($changed) {
+    $replacements = @(
+      @('$RegularUsers = Get-MtUser -Count 5 -UserType ''Member''', '$RegularUsers = @(Get-MtUser -Count 5 -UserType ''Member'')'),
+      @('$AdminUsers = Get-MtUser -Count 5 -UserType ''Admin''', '$AdminUsers = @(Get-MtUser -Count 5 -UserType ''Admin'')'),
+      @('$EmergencyAccessUsers = Get-MtUser -Count 5 -UserType ''EmergencyAccess''', '$EmergencyAccessUsers = @(Get-MtUser -Count 5 -UserType ''EmergencyAccess'')'),
+      @('$RegularUsers = $RegularUsers | Where-Object { $_.id -notin $EmergencyAccessUsers.id }', '$RegularUsers = @($RegularUsers | Where-Object { $_.id -notin $EmergencyAccessUsers.id })'),
+      @('$AdminUsers = $AdminUsers | Where-Object { $_.id -notin $EmergencyAccessUsers.id }', '$AdminUsers = @($AdminUsers | Where-Object { $_.id -notin $EmergencyAccessUsers.id })'),
+      @('-ForEach @( $RegularUsers ) {', '-ForEach @( $RegularUsers ) -AllowNullOrEmptyForEach {'),
+      @('-ForEach @( $EmergencyAccessUsers ) {', '-ForEach @( $EmergencyAccessUsers ) -AllowNullOrEmptyForEach {')
+    )
+    foreach ($pair in $replacements) {
+      if ([regex]::Matches($source, [regex]::Escape($pair[0])).Count -ne 1) { throw 'assessment.whatIfSourceUnrecognized' }
+      $source = $source.Replace($pair[0], $pair[1])
+    }
+    $hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($source)))
+    if ($hash -cne $patchedHash) { throw 'assessment.whatIfPatchInvalid' }
+    [IO.File]::WriteAllText($path, $source, [Text.UTF8Encoding]::new($false))
+  }
+  [pscustomobject]@{ Kind = 'Maester.WhatIfCollectionCompatibility'; SchemaVersion = 1; OriginalSha256 = $originalHash; EffectiveSha256 = $patchedHash; Changed = $changed }
+}
 
 function ConvertTo-BoolOrDefault {
   param(
@@ -24,6 +109,49 @@ function ConvertTo-BoolOrDefault {
     'false' { return $false }
     default { return $Default }
   }
+}
+
+function Assert-ApprovedDriftCliOptions {
+  param(
+    [Parameter(Mandatory)][bool]$Enabled,
+    [Parameter(Mandatory)][System.Collections.IDictionary]$BoundParameters,
+    [string]$InputRoot,
+    [string]$ExpectedBaselineManifestSha256,
+    [string]$ExpectedTenantId,
+    [string]$Environment,
+    [string]$RunId,
+    [string]$ProducerId,
+    [string]$ProducerRevision,
+    [string]$StorageAccountName,
+    [string]$MailRecipient,
+    [string]$WebAppName
+  )
+  $driftParameterNames = @(
+    'DriftInputRoot', 'DriftExpectedBaselineManifestSha256', 'DriftExpectedTenantId',
+    'DriftEnvironment', 'DriftRunId', 'DriftProducerId', 'DriftProducerRevision',
+    'DriftMaxAgeMinutes'
+  )
+  if (-not $Enabled) {
+    foreach ($name in $driftParameterNames) {
+      if ($BoundParameters.ContainsKey($name)) { throw 'drift.optionsRequireEnablement' }
+    }
+    return
+  }
+  foreach ($value in @($InputRoot, $ExpectedBaselineManifestSha256, $ExpectedTenantId, $Environment, $RunId, $ProducerId, $ProducerRevision)) {
+    if ([string]::IsNullOrWhiteSpace($value)) { throw 'drift.optionsIncomplete' }
+  }
+  if ($ExpectedBaselineManifestSha256 -cnotmatch '^[0-9a-f]{64}\z' -or $ProducerRevision -cnotmatch '^[0-9a-f]{40}\z') {
+    throw 'drift.optionsInvalid'
+  }
+  if (-not [string]::IsNullOrWhiteSpace($MailRecipient) -or -not [string]::IsNullOrWhiteSpace($WebAppName)) {
+    throw 'drift.publishingAudienceUnsupported'
+  }
+  if ([string]::IsNullOrWhiteSpace($StorageAccountName)) { throw 'drift.storageDestinationRequired' }
+}
+
+function Remove-ApprovedDriftRunRoot {
+  if (-not $EnableApprovedDrift -or $null -eq $approvedDriftRun) { return }
+  Remove-DriftOwnedDirectory -Path $approvedDriftRun.Root -Parent $approvedDriftRun.Parent -LeafPattern ('^' + [regex]::Escape($approvedDriftRun.Leaf) + '\z')
 }
 
 function Get-PlainToken {
@@ -51,6 +179,7 @@ function Set-BlobContent {
   $headers = @{
     'Authorization'  = "Bearer $StorageToken"
     'x-ms-version'   = '2021-12-02'
+    'x-ms-date'      = [datetime]::UtcNow.ToString('R', [Globalization.CultureInfo]::InvariantCulture)
     'x-ms-blob-type' = 'BlockBlob'
     'x-ms-access-tier' = $AccessTier
   }
@@ -110,13 +239,12 @@ function Publish-WebAppContent {
 }
 
 # ──────────────────────────────────────────────
-# Bootstrap exact, hash-verified runtime modules if using the public base image.
+# Require the exact modules installed from the immutable bundle or ACR image.
 # ──────────────────────────────────────────────
 
 Write-Output "Starting Maester container job at $(Get-Date -Format 'u')"
 
 $lockPath = Join-Path $PSScriptRoot 'runtime-packages.lock.json'
-$installerPath = Join-Path $PSScriptRoot 'Install-LockedModules.ps1'
 $packageLock = Get-Content -LiteralPath $lockPath -Raw -ErrorAction Stop | ConvertFrom-Json
 $moduleVersions = @{}
 foreach ($package in $packageLock.packages) { $moduleVersions[[string]$package.name] = [string]$package.version }
@@ -133,6 +261,20 @@ $WebAppResourceGroupName = $env:WEB_APP_RESOURCE_GROUP_NAME
 $ExportContainer = 'archive'
 $DashboardContainer = 'latest'
 
+Assert-ApprovedDriftCliOptions `
+  -Enabled $EnableApprovedDrift `
+  -BoundParameters $PSBoundParameters `
+  -InputRoot $DriftInputRoot `
+  -ExpectedBaselineManifestSha256 $DriftExpectedBaselineManifestSha256 `
+  -ExpectedTenantId $DriftExpectedTenantId `
+  -Environment $DriftEnvironment `
+  -RunId $DriftRunId `
+  -ProducerId $DriftProducerId `
+  -ProducerRevision $DriftProducerRevision `
+  -StorageAccountName $StorageAccountName `
+  -MailRecipient $MailRecipient `
+  -WebAppName $WebAppName
+
 if ($includeExchange) {
   $requiredModules += 'ExchangeOnlineManagement'
 }
@@ -148,8 +290,7 @@ foreach ($moduleName in $requiredModules) {
   if ($installed.Count -eq 0) { $missing += $moduleName }
 }
 if ($missing.Count -gt 0) {
-  $userModuleRoot = Join-Path $HOME '.local/share/powershell/Modules'
-  & $installerPath -LockPath $lockPath -DestinationRoot $userModuleRoot
+  throw "Required locked modules are missing from the immutable runtime: $($missing -join ', ')."
 }
 foreach ($moduleName in $requiredModules) {
   if (-not @(Get-Module -ListAvailable -Name $moduleName | Where-Object { $_.Version -eq [version]$moduleVersions[$moduleName] }).Count) {
@@ -163,6 +304,29 @@ foreach ($moduleName in $requiredModules) {
 
 foreach ($moduleName in $requiredModules) {
   Import-Module $moduleName -RequiredVersion $moduleVersions[$moduleName] -Force -ErrorAction Stop
+}
+
+if ($ValidateRuntimeOnly) {
+  $versions = [ordered]@{}
+  foreach ($name in $requiredModules) {
+    $loaded = @(Get-Module -Name $name)
+    if ($loaded.Count -ne 1 -or $loaded[0].Version -ne [version]$moduleVersions[$name]) { throw "Exact module import failed: $name." }
+    $versions[$name] = $loaded[0].Version.ToString()
+  }
+  [ordered]@{ validation = 'runtime-only'; powerShell = $PSVersionTable.PSVersion.ToString(); dotnet = [Environment]::Version.ToString(); architecture = 'X64'; modules = $versions } | ConvertTo-Json -Depth 5
+  return
+}
+
+Import-Module (Join-Path $PSScriptRoot 'Maester.AssessmentEvidence.psm1') -Force -ErrorAction Stop
+$assessmentStartedAt = [datetimeoffset]::UtcNow
+$executionName = $env:CONTAINER_APP_JOB_EXECUTION_NAME
+if (-not $EnableApprovedDrift -and $executionName -cnotmatch '^[a-z0-9][a-z0-9-]{0,127}\z') { throw 'assessment.executionIdentityMissing' }
+$evidenceSource = Get-MaesterEvidenceSource -ScriptsRoot $PSScriptRoot -LockPath $lockPath
+$evidenceModules = [ordered]@{}
+foreach ($name in $requiredModules) {
+  $loaded = @(Get-Module -Name $name)
+  if ($loaded.Count -ne 1 -or $loaded[0].Version -ne [version]$moduleVersions[$name]) { throw 'assessment.moduleIdentityMismatch' }
+  $evidenceModules[$name] = $loaded[0].Version.ToString()
 }
 
 Connect-AzAccount -Identity -ErrorAction Stop | Out-Null
@@ -305,14 +469,20 @@ if ($includeAzure) {
 # ──────────────────────────────────────────────
 
 $tempBase = if ($env:TEMP) { $env:TEMP } elseif ($env:TMPDIR) { $env:TMPDIR } else { '/tmp' }
-$tempRoot = Join-Path -Path $tempBase -ChildPath ("maester-{0}-{1}" -f (Get-Date -Format 'yyyyMMddHHmmss'), [guid]::NewGuid().ToString('N'))
-New-Item -Path $tempRoot -ItemType Directory -Force | Out-Null
+$tempRoot = $null
+$approvedDriftRun = $null
+$approvedDriftPrimaryFailure = $null
+$approvedDriftReceipt = $null
+if (-not $EnableApprovedDrift) {
+  $tempRoot = Join-Path -Path $tempBase -ChildPath ("maester-{0}-{1}" -f (Get-Date -Format 'yyyyMMddHHmmss'), [guid]::NewGuid().ToString('N'))
+  New-Item -Path $tempRoot -ItemType Directory -Force | Out-Null
+}
 
 $maesterModule = Get-Module -Name Maester -ListAvailable |
-  Where-Object { $_.Version -eq [version]'2.2.0' } |
+  Where-Object { $_.Version -eq [version]'2.3.0' } |
   Select-Object -First 1
 if (-not $maesterModule) {
-  throw 'Maester module version 2.2.0 was not found after import.'
+  throw 'Maester module version 2.3.0 was not found after import.'
 }
 
 $moduleRoot = Split-Path -Path $maesterModule.Path -Parent
@@ -340,7 +510,50 @@ if (-not $testsPath) {
 
 Write-Output "Using Maester test path: $testsPath"
 
+$approvedDriftRun = $null
+try {
+if ($EnableApprovedDrift) {
+  Import-Module (Join-Path $PSScriptRoot 'Maester.DriftInputs.psm1') -Force -ErrorAction Stop
+  Import-Module (Join-Path $PSScriptRoot 'Maester.DriftRun.psm1') -Force -ErrorAction Stop
+  Assert-MaesterDriftTenantContext -ExpectedTenantId $DriftExpectedTenantId
+  $approvedDriftRun = New-MaesterDriftRunRoot
+  $tempRoot = $approvedDriftRun.OutputParent
+  try {
+    $approvedDriftReceipt = Initialize-MaesterDriftInput `
+      -InputRoot $DriftInputRoot `
+      -StagingParent $approvedDriftRun.StagingParent `
+      -ExpectedBaselineManifestSha256 $DriftExpectedBaselineManifestSha256 `
+      -TenantId $DriftExpectedTenantId `
+      -Environment $DriftEnvironment `
+      -RunId $DriftRunId `
+      -ProducerId $DriftProducerId `
+      -ProducerRevision $DriftProducerRevision `
+      -MaxAgeMinutes $DriftMaxAgeMinutes
+  }
+  catch {
+    $preparationException = $_.Exception
+    $failure = [InvalidOperationException]::new('drift.inputPreparationFailed')
+    $failure.Data['PreparationException'] = $preparationException
+    throw $failure
+  }
+}
+
+# BEGIN What-If test preparation
+if (-not $EnableApprovedDrift) {
+  $preparedTests = Initialize-MaesterAssessmentTests -SourcePath $testsPath -DestinationPath (Join-Path $tempRoot 'maester-tests') -ErrorAction Stop
+  $testsPath = $preparedTests.TestsPath
+  Write-Output ('MAESTER_TEST_COMPATIBILITY_V1:' + ($preparedTests.Compatibility | ConvertTo-Json -Depth 3 -Compress))
+}
+# END What-If test preparation
+
+$junitPath = Join-Path $tempRoot 'pester-junit.xml'
 $pesterConfig = [PesterConfiguration]@{
+  Run = @{
+    # Exclude ambient drift before discovery. The explicit approved adapter
+    # removes only this exclusion after validating and privately staging inputs.
+    ExcludePath = @((Join-Path $testsPath 'Maester/Drift/MT1060Drift.tests.ps1'))
+  }
+  TestResult = @{ Enabled = $true; OutputFormat = 'JUnitXml'; OutputPath = $junitPath; OutputEncoding = 'UTF8' }
   TestRegistry = @{
     Enabled = $false
   }
@@ -350,21 +563,49 @@ $maesterInvokeParameters = @{
   Path                = $testsPath
   OutputFolder        = $tempRoot
   NonInteractive      = $true
+  PassThru            = $true
+  OutputFolderFileName = 'assessment'
+  DisableTelemetry    = $true
+  SkipVersionCheck    = $true
   PesterConfiguration = $pesterConfig
 }
 
-if (-not [string]::IsNullOrWhiteSpace($MailRecipient)) {
+if (-not $EnableApprovedDrift -and -not [string]::IsNullOrWhiteSpace($MailRecipient)) {
   $maesterInvokeParameters['MailRecipient'] = $MailRecipient
   $maesterInvokeParameters['MailUserId'] = $MailRecipient
   Write-Output "Email notifications enabled for recipient: $MailRecipient"
 }
 
 Write-Output "Running Invoke-Maester from test path '$testsPath'"
+$previousDriftRoot = [Environment]::GetEnvironmentVariable('MAESTER_FOLDER_DRIFT', 'Process')
 try {
-  Invoke-Maester @maesterInvokeParameters
+  if ($EnableApprovedDrift) {
+    [Environment]::SetEnvironmentVariable('MAESTER_FOLDER_DRIFT', $approvedDriftReceipt.StageRoot, 'Process')
+    $approvedDriftRunResult = Invoke-MaesterApprovedDrift `
+      -Receipt $approvedDriftReceipt `
+      -RunRoot $approvedDriftRun.Root `
+      -OutputParent $approvedDriftRun.OutputParent `
+      -TestsPath $testsPath `
+      -SuitePath (Join-Path $testsPath 'Maester/Drift/MT1060Drift.tests.ps1') `
+      -MaesterInvokeParameters $maesterInvokeParameters
+  }
+  else {
+    [Environment]::SetEnvironmentVariable('MAESTER_FOLDER_DRIFT', [System.Management.Automation.Language.NullString]::Value, 'Process')
+    $maesterOutput = @(Invoke-Maester @maesterInvokeParameters)
+  }
 }
 catch {
-  throw "Invoke-Maester failed: $($_.Exception.Message)"
+  $invocationException = $_.Exception
+  if ($EnableApprovedDrift) {
+    $failure = [InvalidOperationException]::new('drift.runFailed')
+    $failure.Data['InvocationException'] = $invocationException
+    throw $failure
+  }
+  throw "Invoke-Maester failed: $($invocationException.Message)"
+}
+finally {
+  $restoreDriftRoot = if ($null -eq $previousDriftRoot) { [System.Management.Automation.Language.NullString]::Value } else { $previousDriftRoot }
+  [Environment]::SetEnvironmentVariable('MAESTER_FOLDER_DRIFT', $restoreDriftRoot, 'Process')
 }
 Write-Output 'Invoke-Maester execution completed.'
 
@@ -372,13 +613,14 @@ Write-Output 'Invoke-Maester execution completed.'
 # Locate generated report
 # ──────────────────────────────────────────────
 
-$generatedHtml = Get-ChildItem -Path $tempRoot -Recurse -Filter '*.html' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-if ($generatedHtml -and $generatedHtml.Length -gt 0) {
-  $outputHtmlPath = $generatedHtml.FullName
+if ($EnableApprovedDrift) {
+  $outputHtmlPath = $approvedDriftRunResult.OutputHtmlPath
+  if (-not (Test-Path -LiteralPath $outputHtmlPath -PathType Leaf)) { throw 'Invoke-Maester did not generate a nonempty HTML report.' }
   Write-Output "Using generated HTML report: $outputHtmlPath"
 }
 else {
-  throw 'Invoke-Maester did not generate a nonempty HTML report.'
+  $outputHtmlPath = Join-Path $tempRoot 'assessment.html'
+  $assessmentEvidence = Get-MaesterAssessmentEvidence -Output $maesterOutput -JunitPath $junitPath -TestsPath $testsPath -ReportPath $outputHtmlPath -ErrorAction Stop
 }
 
 Write-Output "Maester run completed. Report generated successfully."
@@ -387,6 +629,7 @@ Write-Output "Maester run completed. Report generated successfully."
 # Upload results to storage
 # ──────────────────────────────────────────────
 
+$publication = [ordered]@{ Archive = 'Disabled'; Latest = 'Disabled'; WebApp = 'Disabled'; Mail = $(if ([string]::IsNullOrWhiteSpace($MailRecipient)) { 'Disabled' } else { 'UpstreamUnverified' }) }
 if (-not [string]::IsNullOrWhiteSpace($StorageAccountName)) {
   $storageToken = Get-PlainToken -ResourceUrl 'https://storage.azure.com/'
   $timestamp = Get-Date -Format 'yyyy-MM-dd-HHmmss'
@@ -396,14 +639,17 @@ if (-not [string]::IsNullOrWhiteSpace($StorageAccountName)) {
   try {
     Compress-GzipFile -InputPath $outputHtmlPath -OutputPath $compressedArchivePath
     Set-BlobContent -AccountName $StorageAccountName -Container $ExportContainer -BlobName $datedArchiveBlob -SourcePath $compressedArchivePath -StorageToken $storageToken -ContentType 'application/gzip' -AccessTier 'Cool' -ContentEncoding 'gzip'
+    $publication.Archive = 'Published'
     Write-Output "Uploaded archived report (gzip): $datedArchiveBlob"
   }
   catch {
+    $publication.Archive = 'Failed'
     Write-Warning "Archive upload failed: $($_.Exception.Message)"
   }
 
   try {
     Set-BlobContent -AccountName $StorageAccountName -Container $DashboardContainer -BlobName 'latest.html' -SourcePath $outputHtmlPath -StorageToken $storageToken -ContentType 'text/html' -AccessTier 'Cool'
+    $publication.Latest = 'Published'
     Write-Output "Uploaded latest report pointer: latest.html"
   }
   catch {
@@ -417,9 +663,43 @@ if (-not [string]::IsNullOrWhiteSpace($StorageAccountName)) {
 
 if (-not [string]::IsNullOrWhiteSpace($WebAppName) -and -not [string]::IsNullOrWhiteSpace($WebAppResourceGroupName)) {
   Publish-WebAppContent -AppName $WebAppName -AppResourceGroupName $WebAppResourceGroupName -SourcePath $outputHtmlPath
+  $publication.WebApp = 'Published'
 }
 elseif (-not [string]::IsNullOrWhiteSpace($WebAppName)) {
+  $publication.WebApp = 'Failed'
   Write-Warning "WEB_APP_NAME is set to '$WebAppName' but WEB_APP_RESOURCE_GROUP_NAME is missing. Skipping Web App content publish."
+}
+
+# Publish only a sanitized, execution-specific attestation. Detailed reports and
+# JUnit remain private; no tests, tenant data, tokens or exception text are logged.
+if (-not $EnableApprovedDrift -and -not [string]::IsNullOrWhiteSpace($StorageAccountName)) {
+  $validationReceipt = [ordered]@{
+    SchemaVersion = 1; Kind = 'MaesterContainerAssessment'; ExecutionName = $executionName
+    StartedAt = $assessmentStartedAt.ToString('o'); CompletedAt = [datetimeoffset]::UtcNow.ToString('o')
+    Source = $evidenceSource
+    Runtime = [ordered]@{ PowerShell = $PSVersionTable.PSVersion.ToString(); DotNet = [Environment]::Version.ToString(); Edition = $PSVersionTable.PSEdition; OS = 'Linux'; Architecture = 'X64'; Modules = $evidenceModules }
+    Assessment = $assessmentEvidence; Publication = $publication
+  }
+  $receiptPath = Join-Path $tempRoot 'validation-receipt.json'
+  $validationReceipt | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $receiptPath -Encoding utf8 -ErrorAction Stop
+  Set-BlobContent -AccountName $StorageAccountName -Container $ExportContainer -BlobName "validation-receipts/$executionName.json" -SourcePath $receiptPath -StorageToken $storageToken -ContentType 'application/json' -AccessTier 'Cool'
+}
+}
+catch {
+  $approvedDriftPrimaryFailure = $_.Exception
+  throw
+}
+finally {
+  if ($EnableApprovedDrift -and $null -ne $approvedDriftRun) {
+    try { Remove-ApprovedDriftRunRoot }
+    catch {
+      $failure = [InvalidOperationException]::new('drift.runCleanupFailed')
+      $failure.Data['RunRoot'] = $approvedDriftRun.Root
+      $failure.Data['CleanupException'] = $_.Exception
+      if ($null -ne $approvedDriftPrimaryFailure) { $failure.Data['PrimaryException'] = $approvedDriftPrimaryFailure }
+      throw $failure
+    }
+  }
 }
 
 Write-Output "Container job finished at $(Get-Date -Format 'u')"
